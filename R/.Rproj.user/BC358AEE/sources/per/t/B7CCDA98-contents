@@ -1,0 +1,1959 @@
+---
+title: "FDI Analysis"
+author: "Bosco Hung"
+date: "2025-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::opts_knit$set(root.dir = "~/Documents/IPE/FDI")  
+
+required_packages <- c("tidyverse", "plm", "PooledMeanGroup", "pco", "countrycode", "Westerlund", "stargazer", "lmtest", "sandwich", "ggplot2")
+
+new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
+
+invisible(lapply(required_packages, library, character.only = TRUE))
+```
+
+# Read and merge the variables
+```{r wb-data-import}
+# Helper: read single variable file, pivot to long, rename value column
+read_var <- function(path, varname) {
+  read_csv(path, show_col_types = FALSE, skip = 4) %>%
+    # Keep only useful columns: country + year columns
+    select(`Country Name`, `Country Code`, matches("^\\d{4}$")) %>%
+    pivot_longer(
+      cols      = matches("^\\d{4}$"),
+      names_to  = "year",
+      values_to = varname
+    ) %>%
+    rename(
+      country = `Country Name`,
+      iso3c   = `Country Code`
+    ) %>%
+    mutate(
+      year = as.integer(year)
+    )
+}
+
+# List of files (paths as you gave)
+files <- c(
+  fdi_wb     = "Data/World Bank/API_BX.KLT.DINV.CD.WD_DS2_en_csv_v2_252826/API_BX.KLT.DINV.CD.WD_DS2_en_csv_v2_252826.csv",
+  gdp_wb     = "Data/World Bank/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_280632/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_280632.csv",
+  ps_wb      = "Data/World Bank/API_PV.EST_DS2_en_csv_v2_126909/API_PV.EST_DS2_en_csv_v2_126909.csv",
+  gdpgr_wb   = "Data/World Bank/API_NY.GDP.MKTP.KD.ZG_DS2_en_csv_v2_280803/API_NY.GDP.MKTP.KD.ZG_DS2_en_csv_v2_280803.csv",
+  cpi_wb     = "Data/World Bank/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_280663/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_280663.csv",
+  cpi_index_wb = "Data/World Bank/API_FP.CPI.TOTL_DS2_en_csv_v2_252184/API_FP.CPI.TOTL_DS2_en_csv_v2_252184.csv",
+  unemp_wb   = "Data/World Bank/API_SL.UEM.TOTL.ZS_DS2_en_csv_v2_280820/API_SL.UEM.TOTL.ZS_DS2_en_csv_v2_280820.csv",
+  export_wb = "Data/World Bank/API_NE.EXP.GNFS.CD_DS2_en_csv_v2_128505/API_NE.EXP.GNFS.CD_DS2_en_csv_v2_128505.csv",
+  import_wb = "Data/World Bank/API_NE.IMP.GNFS.CD_DS2_en_csv_v2_280604/API_NE.IMP.GNFS.CD_DS2_en_csv_v2_280604.csv",
+  #trade_open   = "Data/World Bank/API_NE.TRD.GNFS.ZS_DS2_en_csv_v2_242492/API_NE.TRD.GNFS.ZS_DS2_en_csv_v2_242492.csv",
+  corrupt_wb = "Data/World Bank/API_CC.EST_DS2_en_csv_v2_5926/API_CC.EST_DS2_en_csv_v2_5926.csv"
+)
+
+# Read and merge into one panel data frame
+wb_panel_raw_uncleaned <- imap(files, read_var) %>%
+  reduce(full_join, by = c("country", "iso3c", "year"))
+```
+
+```{r wto-data-import}
+wto_panel_raw_uncleaned <- read.csv("Data/WTO/merchandise_values_annual_dataset.csv") %>%
+  # 1. Filter for World partners, Total Product, and the specific Import/Export indicators
+  filter(
+    Partner == 'World',
+    ProductCode == 'TO'
+  ) %>%
+  
+  # 2. Drop valid ISOs
+  filter(!is.na(ReporterISO3A) & ReporterISO3A != "") %>%
+  
+  # 3. Select relevant columns
+  select(ReporterISO3A, Year, Value, IndicatorCode) %>%
+  
+  # 4. Pivot from Long to Wide
+  pivot_wider(
+    names_from = IndicatorCode,
+    values_from = Value
+  ) %>%
+  
+  # 5. Rename columns to your desired final names
+  rename(
+    iso3c = ReporterISO3A,
+    year = Year,
+    import_wto = ITS_MTV_AM,
+    export_wto = ITS_MTV_AX
+  )
+```
+
+```{r vdem-data-import}
+vdem_panel_raw_uncleaned <- read_csv("Data/V-Dem/V-Dem-CY-FullOthers-v15_csv/V-Dem-CY-Full+Others-v15.csv") %>%
+  filter(year >= 1990) %>%
+  select(c(country_text_id, year, e_wbgi_pve, v2x_corr)) %>%
+  rename(
+    iso3c   = country_text_id,
+    ps_vdem = e_wbgi_pve,
+    corrupt_vdem = v2x_corr
+  )
+```
+
+```{r uncomtrade-data-import}
+uncomtrade_panel_raw_uncleaned <- read_csv("Data/UN Comtrade/US_FdiFlowsStock.csv") %>%
+  filter(Direction==1 & Flow=='08') %>%
+  # Drop Economy = 1600, 230, 1615, 960, 736
+  filter(!Economy %in% c("1600", "230", "1615", "960", "736")) %>%
+  select(`Economy Label`, Year, `US$ at current prices in millions`) %>%
+  # change Economy from name to iso3c code
+  mutate(iso3c = countrycode(sourcevar = `Economy Label`, 
+                             origin = "country.name", 
+                             destination = "iso3c")) %>%
+  select(iso3c, Year, `US$ at current prices in millions`) %>%
+  rename(
+    year = Year,
+    fdi_un = `US$ at current prices in millions`
+  ) %>%
+  # Drop rows with NA iso3c (unmatched countries)
+  filter(!is.na(iso3c))
+```
+
+```{r imf-data-import}
+imf_ls_panel_raw_uncleaned <- read_csv("Data/IMF/dataset_2025-12-04T12_29_16.087554426Z_DEFAULT_INTEGRATION_IMF.STA_LS_9.0.0.csv") %>%
+  filter(FREQUENCY == "Annual" & INDICATOR == "Unemployment rate" & TYPE_OF_TRANSFORMATION == "Percent") %>%
+  mutate(
+    COUNTRY = case_when(
+      COUNTRY == "Hong Kong Special Administrative Region, People's Republic of China" ~ "Hong Kong",
+      COUNTRY == "Macao Special Administrative Region, People's Republic of China" ~ "Macao",
+      TRUE ~ COUNTRY
+    )) %>%
+  mutate(iso3c = countrycode(sourcevar = `COUNTRY`, 
+                             origin = "country.name", 
+                             destination = "iso3c")) %>%
+  select(iso3c, TIME_PERIOD, OBS_VALUE) %>%
+  rename(
+    year = TIME_PERIOD,
+    unemp_imf = OBS_VALUE
+  ) %>%
+  # Drop rows with NA iso3c (unmatched countries)
+  filter(!is.na(iso3c)) %>%
+  # Make year a numeric variable
+  mutate(year = as.integer(year))
+
+imf_cpi_panel_raw_uncleaned <- read_csv("Data/IMF/dataset_2025-12-04T12_44_09.178716263Z_DEFAULT_INTEGRATION_IMF.STA_CPI_5.0.0.csv") %>%
+  filter(FREQUENCY == "Annual" & INDEX_TYPE == "Consumer price index (CPI)" & TYPE_OF_TRANSFORMATION == "Standard reference period (2010=100), Index" & COICOP_1999 == "All Items") %>%
+  mutate(
+    COUNTRY = case_when(
+      COUNTRY == "Hong Kong Special Administrative Region, People's Republic of China" ~ "Hong Kong",
+      COUNTRY == "Macao Special Administrative Region, People's Republic of China" ~ "Macao",
+      TRUE ~ COUNTRY
+    )) %>%
+  mutate(iso3c = countrycode(sourcevar = `COUNTRY`, 
+                             origin = "country.name", 
+                             destination = "iso3c")) %>%
+  select(iso3c, TIME_PERIOD, OBS_VALUE) %>%
+  rename(
+    year = TIME_PERIOD,
+    cpi_imf = OBS_VALUE
+  ) %>%
+  # Drop rows with NA iso3c (unmatched countries)
+  filter(!is.na(iso3c)) %>%
+  # Make year a numeric variable
+  mutate(year = as.integer(year))
+```
+
+```{r ilo-data-import}
+ilo_panel_raw_uncleaned <- read_csv("Data/ILO/UNE_2EAP_SEX_AGE_RT_A-filtered-2025-12-06.csv") %>%
+  filter(sex.label == "Total" & classif1.label == "Age (Youth, adults): 25+" & !ref_area.label %in% c("World: Upper-middle income excluding China", "World: Lower-middle income excluding India")) %>%
+  mutate(
+    ref_area.label = case_when(
+      ref_area.label == "Hong Kong, China" ~ "Hong Kong",
+      ref_area.label == "Macao, China" ~ "Macao",
+      ref_area.label == "Taiwan, China" ~ "Taiwan",
+      TRUE ~ ref_area.label
+    )) %>%
+  mutate(iso3c = countrycode(sourcevar = ref_area.label, 
+                             origin = "country.name", 
+                             destination = "iso3c")) %>%
+  select(iso3c, time, obs_value) %>%
+  rename(
+    year = time,
+    unemp_ilo = obs_value
+  ) %>%
+  # Drop rows with NA iso3c (unmatched countries)
+  filter(!is.na(iso3c))
+
+```
+
+```{r data-merge}
+# Merge the dataset based on iso3c and year
+panel_raw_uncleaned <- wb_panel_raw_uncleaned %>%
+  left_join(wto_panel_raw_uncleaned, by = c("iso3c", "year")) %>%
+  left_join(vdem_panel_raw_uncleaned, by = c("iso3c", "year")) %>%
+  left_join(uncomtrade_panel_raw_uncleaned, by = c("iso3c", "year")) %>%
+  left_join(imf_ls_panel_raw_uncleaned, by = c("iso3c", "year")) %>%
+  left_join(imf_cpi_panel_raw_uncleaned, by = c("iso3c", "year")) %>%
+  left_join(ilo_panel_raw_uncleaned, by = c("iso3c", "year")) 
+
+# Check if anything merged incorrectly (duplicate rows)
+panel_raw_uncleaned %>% group_by(iso3c, year) %>% 
+  filter(n() > 1) %>% 
+  arrange(iso3c, year) %>% 
+  # View specific columns to see what makes them different
+  select(iso3c, year, everything())
+```
+
+```{r missing-data-check}
+asian_countries <- c(
+  "Afghanistan",
+  "Armenia",
+  "Azerbaijan",
+  "Bangladesh",
+  "Bahrain",
+  "Brunei Darussalam",
+  "Bhutan",
+  "China",
+  "Hong Kong SAR, China",
+  "Macao SAR, China",
+  "Indonesia",
+  "India",
+  "Iran, Islamic Rep.",
+  "Iraq",
+  "Israel",
+  "Japan",
+  "Jordan",
+  "Kazakhstan",
+  "Kyrgyz Republic",
+  "Cambodia",
+  "Korea, Rep.",
+  "Korea, Dem. People's Rep.",
+  "Kuwait",
+  "Lao PDR",
+  "Lebanon",
+  "Sri Lanka",
+  "Myanmar",
+  "Mongolia",
+  "Malaysia",
+  "Nepal",
+  "Oman",
+  "Pakistan",
+  "Philippines",
+  "Qatar",
+  "Saudi Arabia",
+  "Singapore",
+  "Syrian Arab Republic",
+  "Thailand",
+  "Tajikistan",
+  "Turkmenistan",
+  "Timor-Leste",
+  "Turkiye",
+  "Uzbekistan",
+  "Viet Nam",
+  "Yemen, Rep."
+)
+
+
+# Check missing values
+panel_raw_uncleaned %>%
+  summarise(across(everything(), ~ sum(is.na(.))))
+
+missing_by_country <- panel_raw_uncleaned %>%
+  filter(year >= 2002, year <= 2020) %>%
+  group_by(country) %>%
+  summarise(
+    n_years = n(),
+    n_missing = sum(is.na(across())),
+    missing_rate = n_missing / (n() * ncol(cur_data()))
+  ) %>%
+  arrange(desc(missing_rate))
+
+missing_by_country
+
+panel_raw <- panel_raw_uncleaned %>%
+  filter(year >= 2002, year <= 2020) %>%
+  arrange(country) %>%
+  filter(country %in% asian_countries)
+```
+
+# Construct the variables
+```{r variable-construction}
+panel <- panel_raw %>%
+  # change the scale
+  mutate(
+    fdi_wb = fdi_wb/10^6,
+    gdp_wb = gdp_wb/10^6
+  ) %>%
+  # create new variables
+  mutate(
+    # Dependent variable: FDI / GDP
+    fdi_gdp = fdi_un / gdp_wb,
+
+    # Interaction term: PS × GDP growth
+    ps_gdpgr = ps_vdem * gdpgr_wb,
+    
+    trade_open = (import_wto + export_wto) / gdp_wb
+  ) %>%
+  # fix the singular matrix problem caused by the low explanatory power
+  mutate(
+    gdp_wb_log = log(gdp_wb)
+  )
+
+```
+
+# Panel structure
+```{r panel-structure}
+#vars_to_test <- c("fdi_wb", "gdp_wb", "ps_wb", "gdpgr_wb", "cpi_wb", "cpi_index_wb", "unemp_wb", "export_wb", "import_wb", "corrupt_wb", "import_wto", "export_wto", "ps_vdem", "corrupt_vdem", "fdi_un", "fdi_gdp", "ps_gdpgr", "trade_open", "cpi_imf", "unemp_imf")
+vars_to_test <- c("gdp_wb_log", "gdpgr_wb", "cpi_imf", "ps_vdem", "corrupt_vdem", "fdi_gdp", "ps_gdpgr", "trade_open", "unemp_ilo")
+
+panel %>% 
+  select(country, vars_to_test) %>%
+  group_by(country) %>%
+  summarise(across(everything(), ~ mean(is.na(.)))) 
+
+pdata <- panel %>%
+  group_by(country) %>%
+  select(country, year, vars_to_test) %>%
+  filter(!any(if_any(all_of(vars_to_test), is.na))) %>%
+  ungroup() %>%
+  arrange(country, year)
+  
+table(index(pdata), useNA = "ifany")
+
+# List of countries included
+pdata$country %>% unique() %>% sort()
+```
+
+```{r clean-panel}
+# Number of time periods per country (T_i)
+quantity <- pdata %>%
+  count(country, name = "T") %>%
+  pull(T)
+
+panel_clean <- pdata %>%
+  mutate(
+    # Centre PS and GDP growth for interaction
+    ps_c       = ps_vdem  - mean(ps_vdem,  na.rm = TRUE),
+    g_c        = gdpgr_wb - mean(gdpgr_wb, na.rm = TRUE),
+    ps_gdpgr_c = ps_c * g_c,
+
+    # gdp is already transformed
+
+    # Standardised controls to similar scale
+    cpi_std     = as.numeric(scale(cpi_imf)),
+    corrupt_std = as.numeric(scale(corrupt_vdem)),
+    trade_std   = as.numeric(scale(trade_open)),
+    unemp_std   = as.numeric(scale(unemp_ilo))
+  )
+```
+
+# IPS
+```{r ips-test}
+ips_results <- lapply(vars_to_test, function(v) {
+  f <- as.formula(paste(v, "~ 1"))
+  purtest(f, data = pdata,
+          index = "country",
+          test = "ips",
+          exo  = "intercept",
+          pmax = 3,
+          lags = "AIC")
+})
+names(ips_results) <- vars_to_test
+
+# Extract the IPS statistic and p-value for each variable
+ips_stat  <- sapply(ips_results, function(x) x$statistic)
+ips_pval  <- sapply(ips_results, function(x) x$p.value)
+
+# Build a clean results table
+ips_table <- data.frame(
+  variable  = colnames(ips_stat),
+  statistic = as.numeric(ips_stat["statistic", ]),
+  p_value   = as.numeric(ips_stat["p.value", ]),
+  row.names = NULL
+)
+ips_table
+
+add_stars <- function(p) {
+  sym <- ifelse(p < 0.001, "***",
+         ifelse(p < 0.01, "**",
+         ifelse(p < 0.05, "*", "")))
+  sprintf("%.4f%s", p, sym)
+}
+
+ips_table_disp <- ips_table %>%
+  mutate(
+    p_value = add_stars(p_value),
+    variable = dplyr::recode(variable,
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "gdpgr_wb"     = "GDP Growth",
+      "cpi_imf"      = "CPI (Inflation)",
+      "ps_vdem"      = "Political Stability (V-Dem)",
+      "corrupt_vdem" = "Corruption Control",
+      "fdi_gdp"      = "FDI (% of GDP)",
+      "ps_gdpgr"     = "Pol. Stability $\\times$ GDP Growth", # Assuming interaction
+      "trade_open"   = "Trade Openness",
+      "unemp_ilo"    = "Unemployment"
+    )
+  ) %>% 
+  setNames(c("Variable", "Test Statistic", "P-value"))
+
+stargazer(
+  ips_table_disp[, c("Variable", "Test Statistic", "P-value")],
+  summary  = FALSE,
+  rownames = FALSE,
+
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits = 4,
+  title = "IPS Panel Unit Root Test Results",
+  label = "tab:ips_results",
+  out = "Output/ips_results.tex"
+)
+```
+
+```{r rerun-ips}
+alpha <- 0.05  # significance level
+
+ips_pvals <- sapply(ips_results, function(res) {
+  res$statistic$p.value[1]   # extract the p-value
+})
+
+# Identify variables requiring differencing (fail to reject unit root)
+vars_to_diff <- names(ips_pvals)[ips_pvals > alpha]
+vars_to_diff <- sub("\\.Wtbar$", "", vars_to_diff)
+
+vars_to_diff
+
+panel_diff <- pdata %>%
+  group_by(country) %>%
+  arrange(year) %>%
+  mutate(
+    across(
+      .cols  = all_of(vars_to_diff),
+      .fns   = ~ c(NA, diff(.x)),
+      .names = "d_{.col}"
+    )
+  ) %>%
+  ungroup()
+
+panel_diff_clean <- panel_diff %>%
+  filter(!if_any(starts_with("d_"), is.na))
+
+pdata_diff <- pdata.frame(panel_diff_clean, index = c("country", "year"))
+
+diff_vars <- paste0("d_", vars_to_diff)
+
+ips_diff_results <- lapply(diff_vars, function(v) {
+  f <- as.formula(paste(v, "~ 1"))
+  purtest(f, data = pdata_diff,
+          index = "country",
+          test  = "ips",
+          exo   = "intercept",
+          pmax  = 3,
+          lags  = "AIC")
+})
+
+names(ips_diff_results) <- diff_vars
+
+# Extract the IPS statistic and p-value for each variable
+ips_diff_stat  <- sapply(ips_diff_results, function(x) x$statistic)
+ips_diff_pval  <- sapply(ips_diff_results, function(x) x$p.value)
+
+# Build a clean results table
+ips_diff_table <- data.frame(
+  variable  = colnames(ips_diff_stat),
+  statistic = as.numeric(ips_diff_stat["statistic", ]),
+  p_value   = as.numeric(ips_diff_stat["p.value", ]),
+  row.names = NULL
+)
+ips_diff_table
+
+ips_diff_table_disp <- ips_diff_table %>%
+  mutate(
+    p_value = add_stars(p_value),
+    variable = dplyr::recode(variable,
+      # Mappings for differenced variables
+      "d_gdp_wb_log"   = "Log GDP (millions)",
+      "d_gdpgr_wb"     = "GDP Growth",
+      "d_cpi_imf"      = "CPI (Inflation)",
+      "d_ps_vdem"      = "Political Stability (V-Dem)",
+      "d_corrupt_vdem" = "Corruption Control",
+      "d_fdi_gdp"      = "FDI (% of GDP)",
+      "d_ps_gdpgr"     = "Pol. Stability $\\times$ GDP Growth", 
+      "d_trade_open"   = "Trade Openness",
+      "d_unemp_ilo"    = "Unemployment"
+    )
+  ) %>% 
+  setNames(c("Variable", "Test Statistic", "P-value"))
+
+stargazer(
+  ips_diff_table_disp[, c("Variable", "Test Statistic", "P-value")],
+  summary  = FALSE,
+  rownames = FALSE,
+  
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits = 4,
+  title = "IPS Panel Unit Root Test Results on First Differences",
+  label = "tab:ips_diff_results",
+  out = "Output/ips_diff_results.tex"
+)
+```
+
+# Transformed variables to test
+```{r ips-test-transformed}
+vars_to_test_tr <- c(
+  "fdi_gdp",
+  "ps_c",
+  "g_c",
+  "ps_gdpgr_c",
+  "gdp_wb_log",
+  "cpi_std",
+  "corrupt_std",
+  "trade_std",
+  "unemp_std"
+)
+
+ips_tr_results <- lapply(vars_to_test_tr, function(v) {
+  f <- as.formula(paste(v, "~ 1"))
+  purtest(
+    f,
+    data  = panel_clean,
+    index = "country",
+    test  = "ips",
+    exo   = "intercept",
+    pmax  = 3,
+    lags  = "AIC"
+  )
+})
+names(ips_tr_results) <- vars_to_test_tr
+
+ips_tr_stat <- sapply(ips_tr_results, function(x) x$statistic)
+ips_tr_pval <- sapply(ips_tr_results, function(x) x$p.value)
+
+ips_tr_table <- data.frame(
+  variable  = colnames(ips_tr_stat),
+  statistic = as.numeric(ips_tr_stat["statistic", ]),
+  p_value   = as.numeric(ips_tr_stat["p.value", ]),
+  row.names = NULL
+)
+
+ips_tr_table_disp <- ips_tr_table %>%
+  mutate(
+    p_value = add_stars(p_value),
+    variable = dplyr::recode(variable,
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "gdpgr_wb"     = "GDP Growth",
+      "cpi_imf"      = "CPI (Inflation)",
+      "ps_vdem"      = "Political Stability (V-Dem)",
+      "corrupt_vdem" = "Corruption Control",
+      "fdi_gdp"      = "FDI (% of GDP)",
+      "ps_gdpgr"     = "Pol. Stability $\\times$ GDP Growth", 
+      "trade_open"   = "Trade Openness",
+      "unemp_ilo"    = "Unemployment"
+    )
+  ) %>% 
+  setNames(c("Variable", "Test Statistic", "P-value"))
+
+stargazer(
+  ips_tr_table_disp[, c("Variable", "Test Statistic", "P-value")],
+  summary      = FALSE,
+  rownames     = FALSE,
+  
+  notes        = c(
+    "All variables are centred/scaled transformations of the original series.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align  = "l",
+  notes.append = FALSE,
+  digits       = 4,
+  title        = "IPS Panel Unit Root Test Results (Transformed Variables)",
+  label        = "tab:ips_results_transformed",
+  out          = "Output/ips_results_transformed.tex"
+)
+```
+
+```{r ips-transformed-diff-results}
+alpha_tr <- 0.05
+
+ips_tr_pvals <- sapply(ips_tr_results, function(res) {
+  res$statistic$p.value[1]
+})
+
+vars_to_diff_tr <- names(ips_tr_pvals)[ips_tr_pvals > alpha_tr]
+vars_to_diff_tr <- sub("\\.Wtbar$", "", vars_to_diff_tr)
+
+vars_to_diff_tr
+
+panel_diff_tr <- panel_clean %>%
+  group_by(country) %>%
+  arrange(year) %>%
+  mutate(
+    across(
+      .cols  = all_of(vars_to_diff_tr),
+      .fns   = ~ c(NA, diff(.x)),
+      .names = "d_{.col}"
+    )
+  ) %>%
+  ungroup()
+
+panel_diff_clean_tr <- panel_diff_tr %>%
+  filter(!if_any(starts_with("d_"), is.na))
+
+pdata_diff_tr <- pdata.frame(panel_diff_clean_tr, index = c("country", "year"))
+
+diff_vars_tr <- paste0("d_", vars_to_diff_tr)
+
+ips_diff_tr_results <- lapply(diff_vars_tr, function(v) {
+  f <- as.formula(paste(v, "~ 1"))
+  purtest(
+    f,
+    data  = pdata_diff_tr,
+    index = "country",
+    test  = "ips",
+    exo   = "intercept",
+    pmax  = 3,
+    lags  = "AIC"
+  )
+})
+names(ips_diff_tr_results) <- diff_vars_tr
+
+ips_diff_tr_stat <- sapply(ips_diff_tr_results, function(x) x$statistic)
+ips_diff_tr_pval <- sapply(ips_diff_tr_results, function(x) x$p.value)
+
+ips_diff_tr_table <- data.frame(
+  variable  = colnames(ips_diff_tr_stat),
+  statistic = as.numeric(ips_diff_tr_stat["statistic", ]),
+  p_value   = as.numeric(ips_diff_tr_stat["p.value", ]),
+  row.names = NULL
+)
+
+ips_diff_tr_table_disp <- ips_diff_tr_table %>%
+  mutate(
+    p_value = add_stars(p_value),
+    variable = dplyr::recode(variable,
+      # Specific mappings for the differenced standardized variables
+      "d_cpi_std"      = "CPI (Inflation)",
+      "d_corrupt_std"  = "Corruption Control",
+      "d_trade_std"    = "Trade Openness",
+      "d_unemp_std"    = "Unemployment"
+    )
+  ) %>% 
+  setNames(c("Variable", "Test Statistic", "P-value"))
+
+stargazer(
+  ips_diff_tr_table_disp,
+  summary      = FALSE,
+  rownames     = FALSE,
+  
+  notes        = c(
+    "First differences of centred/scaled variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align  = "l",
+  notes.append = FALSE,
+  digits       = 4,
+  title        = "IPS Panel Unit Root Test Results on First Differences (Transformed Variables)",
+  label        = "tab:ips_diff_results_transformed",
+  out          = "Output/ips_diff_results_transformed.tex"
+)
+```
+
+# ARDL
+```{r ard-l, warning = FALSE}
+# 4. Build level variables for PMG
+y   <- data.frame(fdi_gdp   = panel_clean$fdi_gdp)
+ps  <- data.frame(ps_c      = panel_clean$ps_c)
+g   <- data.frame(g_c       = panel_clean$g_c)
+int <- data.frame(ps_gdpgr_c = panel_clean$ps_gdpgr_c)
+
+gdp     <- data.frame(gdp_wb_log     = panel_clean$gdp_wb_log)
+cpi     <- data.frame(cpi_std     = panel_clean$cpi_std)
+corrupt <- data.frame(corrupt_std = panel_clean$corrupt_std)
+trade   <- data.frame(trade_std   = panel_clean$trade_std)
+unemp   <- data.frame(unemp_std   = panel_clean$unemp_std)
+
+# 5. First differences (short-run terms)
+dy       <- DiffPanel(variable = y,      quantity = quantity)
+dps      <- DiffPanel(variable = ps,     quantity = quantity)
+dg       <- DiffPanel(variable = g,      quantity = quantity)
+dint     <- DiffPanel(variable = int,    quantity = quantity)
+dgdp     <- DiffPanel(variable = gdp,    quantity = quantity)
+dcpi     <- DiffPanel(variable = cpi,    quantity = quantity)
+dcorrupt <- DiffPanel(variable = corrupt,quantity = quantity)
+dtrade   <- DiffPanel(variable = trade,  quantity = quantity)
+dunemp   <- DiffPanel(variable = unemp,  quantity = quantity)
+
+# 6. Lagged dependent variable (for ECM term)
+ly <- LagPanel(variable = y, quantity = quantity)
+
+# 7. Stack into homogeneous preliminary dataset
+dataPanel_raw <- cbind(
+  y, dy, ly,
+  ps, g, int,
+  gdp, cpi, corrupt, trade, unemp,
+  dps, dg, dint, dgdp, dcpi, dcorrupt, dtrade, dunemp
+)
+
+dataPanel_raw <- data.frame(dataPanel_raw)
+
+names(dataPanel_raw) <- c(
+  # levels
+  "fdi_gdp", "dfdi_gdp", "lfdi_gdp",
+  "ps_c", "g_c", "ps_gdpgr_c",
+  "gdp_wb_log", "cpi_std", "corrupt_std", "trade_std", "unemp_std",
+  # first differences
+  "dps_c", "dg_c", "dps_gdpgr_c",
+  "dgdp_wb_log", "dcpi_std", "dcorrupt_std", "dtrade_std", "dunemp_std"
+)
+
+# 8. Drop NA rows and prepare for PMG
+dataPanel    <- PanelNaOmit(dataset = dataPanel_raw, quantity = quantity)
+dataset_pmg  <- dataPanel$dataset
+quantity_pmg <- dataPanel$quantity   # updated T_i after dropping first differences
+
+# (sanity check: stacked length should equal sum of T_i)
+stopifnot(sum(quantity_pmg) == nrow(dataset_pmg))
+
+# 9. Specify long-run and short-run structure
+vecLR <- c(
+  "lfdi_gdp",   # lagged dependent
+  "ps_c",       # centred PS
+  "g_c",        # centred GDP growth
+  "ps_gdpgr_c", # centred interaction
+  "gdp_wb_log",
+  "cpi_std",
+  "corrupt_std",
+  "trade_std",
+  "unemp_std"   # standardised unemp
+)
+
+# Short-run variables (you can drop "dunemp_std" here if it still causes issues)
+sr_vars <- c(
+  "dfdi_gdp",
+  "dps_c", "dg_c", "dps_gdpgr_c",
+  "dgdp_wb_log", "dcpi_std",
+  "dcorrupt_std", "dtrade_std", "dunemp_std"
+)
+
+# Number of groups based on cleaned panel
+n_groups <- length(quantity_pmg)
+
+vecSR <- setNames(
+  replicate(n_groups, sr_vars, simplify = FALSE),
+  paste0("SR", seq_len(n_groups))
+)
+
+# 10. Number of long-run parameters excluding lagged Y
+k_lr <- length(vecLR) - 1  # should be 8
+
+# 11. Optimise long-run parameters
+pmg_opt <- optimPMG(
+  dLL       = 1e-10,
+  maxIter   = 200,
+  TetaStart = rep(0, k_lr),
+  vecSR     = vecSR,
+  vecLR     = vecLR,
+  dataset   = dataset_pmg,
+  quantity  = quantity_pmg,
+  const     = TRUE
+)
+
+# 12. Extract and order long-run coefficients
+lr_df <- as.data.frame(pmg_opt$LR)
+lr_df$var <- rownames(lr_df)
+
+target_order  <- vecLR[-1]  # all LR regressors except lagged Y
+paramTeta_hat <- lr_df$Coef[ match(target_order, lr_df$var) ]
+
+# Sanity check
+length(paramTeta_hat)  # should be 8
+paramTeta_hat
+
+# 13. Final PMG estimation with optimised long-run parameters
+pmg_fit <- PMG(
+  paramTeta = paramTeta_hat,
+  vecSR     = vecSR,
+  vecLR     = vecLR,
+  dataset   = dataset_pmg,
+  quantity  = quantity_pmg,
+  const     = TRUE
+)
+
+pmg_fit$LR  # long-run coefficients
+
+pmg_fit_LR_disp <- pmg_fit$LR %>%
+  rownames_to_column("variable") %>%
+  mutate(
+    `P>|z|` = add_stars(`P>|z|`),
+    variable = dplyr::recode(variable,
+      "ps_c"         = "Political Stability (V-Dem)",
+      "g_c"          = "GDP Growth",
+      "ps_gdpgr_c"   = "Pol. Stability $\\times$ GDP Growth",
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "cpi_std"      = "CPI (Inflation)",
+      "corrupt_std"  = "Corruption Control",
+      "trade_std"    = "Trade Openness",
+      "unemp_std"    = "Unemployment"
+    )
+  ) %>%
+  # Select and rename columns for a clean final table
+  select(variable, Coef, StdErr, z, `P>|z|`) %>%
+  setNames(c("Variable", "Coefficient", "Std. Error", "z-Statistic", "P-value"))
+
+stargazer(
+  pmg_fit_LR_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "PMG Long-run Coefficients",
+  label    = "tab:pmg_lr",
+  out      = "Output/pmg_lr.tex"
+)
+
+pmg_fit$SR  # short-run coefficients
+
+sr_list <- pmg_fit$SR
+
+sr_df <- do.call(rbind, lapply(seq_along(sr_list), function(g) {
+  m <- as.data.frame(sr_list[[g]])
+  
+  # Rename coefficient column to "Coef"
+  coef_col <- grep("^Coef", names(m), value = TRUE)
+  names(m)[names(m) == coef_col] <- "Coef"
+  
+  m$variable <- rownames(m)
+  m$group    <- g              # group index 1..30 (can map to country later)
+  rownames(m) <- NULL
+  
+  # Keep a clean column order
+  m[, c("group", "variable", "Coef", "StdErr", "z", "P>|z|", "Low95%", "High95%")]
+}))
+
+# Extract unique countries (maintaining order)
+country_names <- unique(panel_clean$country) 
+
+country_map <- tibble(
+  group   = 1:length(country_names),
+  Country = country_names
+)
+
+ec_df_disp <- sr_df %>%
+  filter(grepl("^ec", variable)) %>%
+  mutate(
+    `P>|z|` = add_stars(`P>|z|`)
+  ) %>%
+  # Join with country names
+  left_join(country_map, by = "group") %>%
+  # Select Country first, then the stats
+  select(Country, Coef, StdErr, z, `P>|z|`) %>%
+  setNames(c("Country", "Coefficient", "Std. Error", "z-Statistic", "P-value"))
+
+stargazer(
+  ec_df_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Short-run Error-Correction Terms (ec) by Country",
+  label    = "tab:pmg_ec_sr",
+  out      = "Output/pmg_ec_sr.tex"
+)
+
+get_coef_col <- function(m) grep("^Coef", colnames(m), value = TRUE)[1]
+
+sr_dps_disp <- map_dfr(seq_along(sr_list), function(g) {
+  m <- as.data.frame(sr_list[[g]])
+  coef_col <- get_coef_col(m)
+  
+  tibble(
+    group    = g,
+    variable = rownames(m),
+    coef     = m[[coef_col]],
+    se       = m[["StdErr"]],
+    z        = m[["z"]],
+    p_value  = m[["P>|z|"]]
+  ) %>%
+    filter(variable == "dps_c")
+}) %>%
+  mutate(p_value = add_stars(p_value)) %>%
+  # Add Country Mapping
+  left_join(country_map, by = "group") %>%
+  mutate(
+    across(c(coef, se, z), ~ formatC(., format = "f", digits = 4))
+  ) %>%
+  select(group, Country, coef, se, z, p_value) %>%
+  setNames(c("Group", "Country", "Coefficient", "Std. Error", "z-Statistic", "P-value"))
+
+stargazer(
+  sr_dps_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Short-run Coefficients: Change in Political Stability (dps\\_c)",
+  label    = "tab:pmg_sr_dps",
+  out      = "Output/pmg_sr_dps.tex"
+)
+
+sr_dg_disp <- map_dfr(seq_along(sr_list), function(g) {
+  m <- as.data.frame(sr_list[[g]])
+  coef_col <- get_coef_col(m)
+  
+  tibble(
+    group    = g,
+    variable = rownames(m),
+    coef     = m[[coef_col]],
+    se       = m[["StdErr"]],
+    z        = m[["z"]],
+    p_value  = m[["P>|z|"]]
+  ) %>%
+    filter(variable == "dg_c")
+}) %>%
+  mutate(p_value = add_stars(p_value)) %>%
+  # Add Country Mapping
+  left_join(country_map, by = "group") %>%
+  mutate(
+    across(c(coef, se, z), ~ formatC(., format = "f", digits = 4))
+  ) %>%
+  select(group, Country, coef, se, z, p_value) %>%
+  setNames(c("Group", "Country", "Coefficient", "Std. Error", "z-Statistic", "P-value"))
+
+stargazer(
+  sr_dg_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Short-run Coefficients: Change in Growth (dg\\_c)",
+  label    = "tab:pmg_sr_dg",
+  out      = "Output/pmg_sr_dg.tex"
+)
+
+sr_dps_gdpgr_c_disp <- map_dfr(seq_along(sr_list), function(g) {
+  m <- as.data.frame(sr_list[[g]])
+  coef_col <- get_coef_col(m)
+  
+  tibble(
+    group    = g,
+    variable = rownames(m),
+    coef     = m[[coef_col]],
+    se       = m[["StdErr"]],
+    z        = m[["z"]],
+    p_value  = m[["P>|z|"]]
+  ) %>%
+    filter(variable == "dps_gdpgr_c")
+}) %>%
+  mutate(p_value = add_stars(p_value)) %>%
+  # Add Country Mapping
+  left_join(country_map, by = "group") %>%
+  mutate(
+    across(c(coef, se, z), ~ formatC(., format = "f", digits = 4))
+  ) %>%
+  select(group, Country, coef, se, z, p_value) %>%
+  setNames(c("Group", "Country", "Coefficient", "Std. Error", "z-Statistic", "P-value"))
+
+stargazer(
+  sr_dps_gdpgr_c_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Short-run Coefficients: Change in Interaction (dps\\_gdpgr\\_c)",
+  label    = "tab:pmg_sr_dps_gdpgr",
+  out      = "Output/pmg_sr_dps_gdpgr.tex"
+)
+```
+
+```{r interaction}
+# 1. Extract the Long-Run Coefficients
+beta_ps   <- pmg_fit$LR["ps_c", "Coef"]       # Main effect of Political Stability
+beta_int  <- pmg_fit$LR["ps_gdpgr_c", "Coef"] # Interaction term
+
+# --- STEP A: Recover Covariance Matrix ---
+# WARNING: This approximation assumes Covariance is ZERO (conservative but not perfect).
+var_ps   <- (pmg_fit$LR["ps_c", "StdErr"])^2
+var_int  <- (pmg_fit$LR["ps_gdpgr_c", "StdErr"])^2
+cov_term <- 0 
+# --- STEP B: Calculate Data for Plotting ---
+
+# 1. Moderator Range (Growth)
+g_vals <- seq(min(dataset_pmg$g_c, na.rm=TRUE), 
+              max(dataset_pmg$g_c, na.rm=TRUE), length.out = 100)
+
+# 2. Calculate Marginal Effect (Slope)
+me_est <- beta_ps + (beta_int * g_vals)
+
+# 3. Calculate Standard Error of the Marginal Effect
+# Formula: sqrt( Var(b1) + X^2*Var(b3) + 2*X*Cov(b1,b3) )
+me_se  <- sqrt(var_ps + (g_vals^2 * var_int) + (2 * g_vals * cov_term))
+
+# 4. Create Data Frame
+df_plot <- data.frame(
+  growth_c = g_vals,
+  effect   = me_est,
+  upper    = me_est + 1.96 * me_se,
+  lower    = me_est - 1.96 * me_se
+)
+
+# --- STEP C: Generate the Graph ---
+
+ggplot(df_plot, aes(x = growth_c, y = effect)) +
+  # Add the confidence interval ribbon
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "blue") +
+  # Add the main estimate line
+  geom_line(color = "blue", size = 1) +
+  # Add a zero reference line (to check significance)
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  # Add a rug plot to show distribution of data (optional but recommended)
+  geom_rug(data = dataset_pmg, aes(x = g_c), sides = "b", inherit.aes = FALSE, alpha = 0.3) +
+  labs(
+    title = "Marginal Effect of Political Stability on FDI/GDP",
+    subtitle = "Dependence on GDP Growth (Interaction Effect)",
+    x = "Centered GDP Growth (g_c)",
+    y = "Marginal Effect of Political Stability"
+  ) +
+  theme_bw()
+
+ggsave("Output/marginal_effect_plot.png", width = 8, height = 6)
+```
+
+```{r panel-comparison}
+# Define labels for Stargazer (Must match the order of variables in the formula)
+cov_labels <- c(
+  "Political Stability (V-Dem)",
+  "GDP Growth",
+  "Pol. Stability $\\times$ GDP Growth",
+  "Log GDP (millions)",
+  "CPI (Inflation)",
+  "Corruption Control",
+  "Trade Openness",
+  "Unemployment"
+)
+
+# Pooled OLS
+pdata_static <- pdata.frame(panel_clean, index = c("country", "year"))
+
+pool_ols <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data  = pdata_static,
+  model = "pooling"
+)
+
+stargazer(
+  pool_ols,
+  # Standard regression table settings
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Pooled OLS Results",
+  label    = "tab:pool_ols",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  out      = "Output/pool_ols.tex"
+)
+
+# Country FE
+fe_country <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static,
+  model  = "within",
+  effect = "individual"
+)
+
+stargazer(
+  fe_country,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Country Fixed Effects Results",
+  label    = "tab:fe_country",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  out      = "Output/fe_country.tex"
+)
+
+# Two-way FE
+fe_twoway <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static,
+  model  = "within",
+  effect = "twoways"
+)
+
+stargazer(
+  fe_twoway,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Two-way Fixed Effects Results",
+  label    = "tab:fe_twoway",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  out      = "Output/fe_twoway.tex"
+)
+
+# Calculate Robust Matrix
+fe_twoway_robust <- coeftest(
+  fe_twoway,
+  vcov = vcovHC(fe_twoway, type = "HC1", cluster = "group")
+)
+
+# 1. Define the raw variable names in the exact order of your formula
+raw_vars <- c(
+  "ps_c", 
+  "g_c", 
+  "ps_gdpgr_c", 
+  "gdp_wb_log", 
+  "cpi_std", 
+  "corrupt_std", 
+  "trade_std", 
+  "unemp_std"
+)
+
+# 2. Extract the first 8 rows (the actual coefficients) from the robust matrix
+# coeftest objects are matrices; we take the first 8 rows and all 4 columns
+robust_mat <- fe_twoway_robust[1:8, ]
+
+# 3. Create the clean dataframe
+robust_disp <- data.frame(
+  variable = raw_vars,
+  Coef     = robust_mat[, 1], # Estimate
+  StdErr   = robust_mat[, 2], # Std. Error
+  tStat    = robust_mat[, 3], # t value
+  PVal     = robust_mat[, 4]  # Pr(>|t|)
+) %>%
+  mutate(
+    # Add stars to the P-value column
+    PVal = add_stars(PVal),
+    
+    # Recode the variable names for the final table
+    variable = dplyr::recode(variable,
+      "ps_c"         = "Political Stability (V-Dem)",
+      "g_c"          = "GDP Growth",
+      "ps_gdpgr_c"   = "Pol. Stability $\\times$ GDP Growth",
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "cpi_std"      = "CPI (Inflation)",
+      "corrupt_std"  = "Corruption Control",
+      "trade_std"    = "Trade Openness",
+      "unemp_std"    = "Unemployment"
+    )
+  ) %>%
+  setNames(c("Variable", "Coefficient", "Std. Error", "t-Statistic", "P-value"))
+
+# 4. Generate the Stargazer Table
+stargazer(
+  robust_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  digits   = 4,
+  title    = "Two-way Fixed Effects Results with Clustered Standard Errors",
+  label    = "tab:fe_twoway_robust",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  out      = "Output/fe_twoway_robust.tex"
+)
+
+# RE Model
+re_model <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static,
+  model  = "random",
+  effect = "twoways"
+)
+
+stargazer(
+  re_model,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Random Effects Results",
+  label    = "tab:re_model",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  out      = "Output/re_model.tex"
+)
+
+# Hausman Test
+ht <- phtest(fe_twoway, re_model)
+
+hausman_df <- data.frame(
+  test      = "Hausman FE vs RE",
+  chisq     = as.numeric(ht$statistic),
+  df        = as.numeric(ht$parameter),
+  p_value   = as.numeric(ht$p.value)
+) %>%
+  mutate(
+    p_value = add_stars(p_value)
+  ) %>%
+  setNames(c("Test", "Chi-Sq Statistic", "DF", "P-value"))
+
+stargazer(
+  hausman_df,
+  summary  = FALSE,
+  rownames = FALSE,
+  digits   = 4,
+  title    = "Hausman Test: Two-way Fixed vs Random Effects",
+  label    = "tab:hausman",
+  notes    = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  out      = "Output/hausman_test.tex"
+)
+
+# Extract Robust SEs for the comparison table
+se_fe_tw <- sqrt(diag(vcovHC(fe_twoway, type = "HC1", cluster = "group")))
+
+stargazer(
+  pool_ols,
+  fe_country,
+  fe_twoway,
+  re_model,
+  type = "latex",
+  title = "Comparison of OLS, Fixed Effects, Two-Way Fixed Effects, and Random Effects Models",
+  label = "tab:model_comparison",
+  
+  # Labels
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  covariate.labels = cov_labels,
+  column.labels    = c("Pooled OLS", "FE (Country)", "FE (Two-way)", "RE (Two-way)"),
+  column.separate  = c(1, 1, 1, 1),
+  
+  # Inject Robust SEs into the 3rd model
+  #se = list(NULL, NULL, se_fe_tw, NULL),
+  
+  digits = 4,
+  keep.stat = c("n", "rsq"),
+  notes = "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively.",
+  notes.align = "l",
+  out = "Output/model_comparison.tex"
+)
+```
+
+```{r panel-comparison-transformed}
+# 1. Define Variable Labels (Must match the order in formula)
+cov_labels <- c(
+  "Political Stability (V-Dem)",
+  "GDP Growth",
+  "Pol. Stability $\\times$ GDP Growth",
+  "Log GDP (millions)",
+  "CPI (Inflation)",
+  "Corruption Control",
+  "Trade Openness",
+  "Unemployment"
+)
+
+# -------------------------------------------------------------------
+# Pooled OLS (Transformed)
+# -------------------------------------------------------------------
+pdata_static_tr <- pdata.frame(panel_clean, index = c("country", "year"))
+
+pool_ols_tr <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data  = pdata_static_tr,
+  model = "pooling"
+)
+
+stargazer(
+  pool_ols_tr,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Pooled OLS Results (Transformed Variables)",
+  label    = "tab:pool_ols_transformed",
+  notes    = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  out      = "Output/pool_ols_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Country FE (Transformed)
+# -------------------------------------------------------------------
+fe_country_tr <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static_tr,
+  model  = "within",
+  effect = "individual"
+)
+
+stargazer(
+  fe_country_tr,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Country Fixed Effects Results (Transformed Variables)",
+  label    = "tab:fe_country_transformed",
+  notes    = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  out      = "Output/fe_country_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Two-way FE (Transformed)
+# -------------------------------------------------------------------
+fe_twoway_tr <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static_tr,
+  model  = "within",
+  effect = "twoways"
+)
+
+stargazer(
+  fe_twoway_tr,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Two-way Fixed Effects Results (Transformed Variables)",
+  label    = "tab:fe_twoway_transformed",
+  notes    = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  out      = "Output/fe_twoway_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Robust FE (Standalone Table)
+# -------------------------------------------------------------------
+library(lmtest)
+library(sandwich)
+
+fe_twoway_robust_tr <- coeftest(
+  fe_twoway_tr,
+  vcov = vcovHC(fe_twoway_tr, type = "HC1", cluster = "group")
+)
+
+# Manual construction to handle naming issues safely
+raw_vars <- c("ps_c", "g_c", "ps_gdpgr_c", "gdp_wb_log", "cpi_std", "corrupt_std", "trade_std", "unemp_std")
+robust_mat_tr <- fe_twoway_robust_tr[1:8, ] # Extract first 8 rows to avoid NA rows
+
+robust_disp_tr <- data.frame(
+  variable = raw_vars,
+  Coef     = robust_mat_tr[, 1],
+  StdErr   = robust_mat_tr[, 2],
+  tStat    = robust_mat_tr[, 3],
+  PVal     = robust_mat_tr[, 4]
+) %>%
+  mutate(
+    PVal = add_stars(PVal),
+    variable = dplyr::recode(variable,
+      "ps_c"         = "Political Stability (V-Dem)",
+      "g_c"          = "GDP Growth",
+      "ps_gdpgr_c"   = "Pol. Stability $\\times$ GDP Growth",
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "cpi_std"      = "CPI (Inflation)",
+      "corrupt_std"  = "Corruption Control",
+      "trade_std"    = "Trade Openness",
+      "unemp_std"    = "Unemployment"
+    )
+  ) %>%
+  setNames(c("Variable", "Coefficient", "Std. Error", "t-Statistic", "P-value"))
+
+stargazer(
+  robust_disp_tr,
+  summary  = FALSE,
+  rownames = FALSE,
+  digits   = 4,
+  title    = "Two-way FE Results with Clustered SEs (Transformed Variables)",
+  label    = "tab:fe_twoway_robust_transformed",
+  notes    = c(
+    "Models estimated with centred/scaled regressors.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  notes.append = FALSE,
+  out      = "Output/fe_twoway_robust_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Random Effects (Transformed)
+# -------------------------------------------------------------------
+re_model_tr <- plm(
+  fdi_gdp ~ ps_c + g_c + ps_gdpgr_c + gdp_wb_log +
+    cpi_std + corrupt_std + trade_std + unemp_std,
+  data   = pdata_static_tr,
+  model  = "random",
+  effect = "twoways"
+)
+
+stargazer(
+  re_model_tr,
+  header   = FALSE,
+  digits   = 4,
+  covariate.labels = cov_labels,
+  dep.var.labels   = "FDI (Percentage of GDP)",
+  title    = "Random Effects Results (Transformed Variables)",
+  label    = "tab:re_model_transformed",
+  notes    = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  out      = "Output/re_model_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Hausman Test (Transformed)
+# -------------------------------------------------------------------
+ht_tr <- phtest(fe_twoway_tr, re_model_tr)
+
+hausman_tr_df <- data.frame(
+  test    = "Hausman FE vs RE",
+  chisq   = as.numeric(ht_tr$statistic),
+  df      = as.numeric(ht_tr$parameter),
+  p_value = as.numeric(ht_tr$p.value)
+) %>%
+  mutate(p_value = add_stars(p_value)) %>%
+  setNames(c("Test", "Chi-Sq Statistic", "DF", "P-value"))
+
+stargazer(
+  hausman_tr_df,
+  summary  = FALSE,
+  rownames = FALSE,
+  digits   = 4,
+  title    = "Hausman Test: Two-way Fixed vs Random Effects (Transformed Variables)",
+  label    = "tab:hausman_transformed",
+  notes    = c(
+    "Models estimated with centred/scaled regressors.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  notes.append = FALSE,
+  out      = "Output/hausman_test_transformed.tex"
+)
+
+# -------------------------------------------------------------------
+# Model Comparison (Transformed)
+# -------------------------------------------------------------------
+se_fe_tw_tr <- sqrt(diag(vcovHC(fe_twoway_tr, type = "HC1", cluster = "group")))
+
+stargazer(
+  pool_ols_tr,
+  fe_country_tr,
+  fe_twoway_tr,
+  re_model_tr,
+  type = "latex",
+  title = "Comparison of OLS, Fixed Effects, and Random Effects Models (Transformed Variables)",
+  label = "tab:model_comparison_transformed",
+  dep.var.labels = "FDI (Percentage of GDP)",
+  covariate.labels = cov_labels,
+  column.labels   = c("Pooled OLS", "FE (Country)", "FE (Two-way)", "RE (Two-way)"),
+  column.separate = c(1, 1, 1, 1),
+  #se = list(NULL, NULL, se_fe_tw, NULL),
+  digits    = 4,
+  keep.stat = c("n", "rsq"),
+  notes = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  out         = "Output/model_comparison_transformed.tex"
+)
+```
+
+# Pesaran CD
+```{r pesaran-cd}
+longrun_model <- plm(
+  fdi_gdp ~ gdp_wb_log + ps_vdem + gdpgr_wb + ps_gdpgr + trade_open + cpi_imf + corrupt_vdem,
+  data   = pdata,
+  model  = "pooling"
+)
+
+cd <- pcdtest(longrun_model, test = "cd")   # Pesaran (2004/2015) CD test :contentReference[oaicite:5]{index=5}
+
+cd
+
+cd_df <- data.frame(
+  test      = "Pesaran CD test",
+  statistic = as.numeric(cd$statistic),
+  p_value   = as.numeric(cd$p.value),
+  alternative = "Cross-sectional dependence",
+  row.names = NULL
+) %>%
+  mutate(
+    p_value = add_stars(p_value)
+  ) %>%
+  setNames(c("Test", "Statistic", "P-value", "Alternative Hypothesis"))
+
+stargazer(
+  cd_df,
+  summary  = FALSE,
+  rownames = FALSE,
+  
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Pesaran Cross-sectional Dependence Test Results",
+  label    = "tab:pesaran_cd",
+  out      = "Output/pesaran_cd.tex"
+)
+```
+
+```{r pesaran-cd-transformed}
+# -------------------------------------------------------------------
+# 1. Pesaran CD Test (Transformed Variables)
+# -------------------------------------------------------------------
+longrun_model_tr <- plm(
+  fdi_gdp ~ gdp_wb_log + ps_c + g_c + ps_gdpgr_c +
+    trade_std + cpi_std + corrupt_std + unemp_std,
+  data  = panel_clean,
+  model = "pooling"
+)
+
+cd_tr <- pcdtest(longrun_model_tr, test = "cd")
+
+cd_tr_df <- data.frame(
+  test        = "Pesaran CD test (Transformed Variables)",
+  statistic   = as.numeric(cd_tr$statistic),
+  p_value     = as.numeric(cd_tr$p.value),
+  alternative = "Cross-sectional dependence",
+  row.names   = NULL
+) %>%
+  mutate(p_value = add_stars(p_value)) %>%
+  setNames(c("Test", "Statistic", "P-value", "Alternative Hypothesis"))
+
+stargazer(
+  cd_tr_df,
+  summary   = FALSE,
+  rownames  = FALSE,
+  notes     = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits    = 4,
+  title     = "Pesaran Cross-sectional Dependence Test (Transformed Variables)",
+  label     = "tab:pesaran_cd_transformed",
+  out       = "Output/pesaran_cd_transformed.tex"
+)
+```
+
+# Pedroni
+```{r pedroni-test}
+# Get basic dimensions
+countries <- unique(pdata$country)
+T_min <- min(table(pdata$country))
+
+# Build a balanced panel matrix for each variable: T × N
+build_matrix <- function(var) {
+  wide <- pdata %>%
+    as.data.frame() %>%
+    select(country, year, !!sym(var)) %>%
+    pivot_wider(names_from = country, values_from = !!sym(var)) %>%
+    arrange(year)
+
+  as.matrix(wide[ , -1])  # drop year
+}
+
+## ---- 1. Set dependent variable and controls ----
+
+dep_var <- "fdi_gdp"             # fixed
+key_x_cols <- c("gdpgr_wb", "ps_vdem", "ps_gdpgr")
+
+## ---- 2. Build matrices via your helper ----
+
+Y_mat <- build_matrix(dep_var)
+
+T_ <- nrow(Y_mat)
+N_ <- ncol(Y_mat)
+M_ <- 1 + length(key_x_cols)     # dep + K indep used in Pedroni
+
+## ---- 3. Build 3D array X_cube: (T, N, M) ----
+
+X_cube <- array(
+  data = NA_real_,
+  dim  = c(T_, N_, M_),
+  dimnames = list(
+    NULL,
+    NULL,
+    c(dep_var, key_x_cols)
+  )
+)
+
+# Dependent variable in slice 1
+X_cube[, , 1] <- Y_mat
+
+# Independent variables in slices 2..M_
+for (j in seq_along(key_x_cols)) {
+  X_cube[, , 1 + j] <- build_matrix(key_x_cols[j])
+}
+
+## ---- 4. Run Pedroni (1999) multivariate test ----
+
+pedroni_res <- pedroni99m(
+  X         = X_cube,
+  kk        = 0,  # Newey-West lags
+  type.stat = 2,  # 1: none, 2: intercept, 3: intercept+trend
+  ka        = 2   # ADF lag length
+)
+
+ped_stat <- pedroni_res$STATISTIC
+
+pedroni_df <- data.frame(
+  test        = rownames(ped_stat),
+  empirical   = ped_stat[, "empirical"],
+  standardized = ped_stat[, "standardized"],
+  row.names   = NULL
+)
+
+pedroni_df$p_value <- 2 * (1 - pnorm(abs(pedroni_df$standardized)))
+pedroni_df_disp <- pedroni_df %>%
+  mutate(
+    p_value = add_stars(p_value),
+    test = dplyr::recode(test,
+      "nipanel"      = "Panel v-Statistic",
+      "rhopanel"     = "Panel rho-Statistic",
+      "tpanelnonpar" = "Panel PP-Statistic",
+      "tpanelpar"    = "Panel ADF-Statistic",
+      "rhogroup"     = "Group rho-Statistic",
+      "tgroupnonpar" = "Group PP-Statistic",
+      "tgrouppar"    = "Group ADF-Statistic"
+    )
+  ) %>%
+  setNames(c("Test Statistic", "Empirical Value", "Standardized Value", "P-value"))
+
+stargazer(
+  pedroni_df_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  
+  notes = c("*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Pedroni (1999) Panel Cointegration Test Results",
+  label    = "tab:pedroni",
+  out      = "Output/pedroni_test.tex"
+)
+```
+
+```{r pedroni-transformed}
+# Helper for transformed matrices (avoid clashing with original build_matrix)
+build_matrix_tr <- function(var) {
+  wide <- panel_clean %>%
+    as.data.frame() %>%
+    select(country, year, !!sym(var)) %>%
+    tidyr::pivot_wider(names_from = country, values_from = !!sym(var)) %>%
+    arrange(year)
+
+  as.matrix(wide[, -1])  # drop year
+}
+
+dep_var_tr    <- "fdi_gdp"
+key_x_cols_tr <- c("g_c", "ps_c", "ps_gdpgr_c")
+
+Y_mat_tr <- build_matrix_tr(dep_var_tr)
+
+T_tr <- nrow(Y_mat_tr)
+N_tr <- ncol(Y_mat_tr)
+M_tr <- 1 + length(key_x_cols_tr)
+
+X_cube_tr <- array(
+  data = NA_real_,
+  dim  = c(T_tr, N_tr, M_tr),
+  dimnames = list(
+    NULL,
+    NULL,
+    c(dep_var_tr, key_x_cols_tr)
+  )
+)
+
+X_cube_tr[, , 1] <- Y_mat_tr
+
+for (j in seq_along(key_x_cols_tr)) {
+  X_cube_tr[, , 1 + j] <- build_matrix_tr(key_x_cols_tr[j])
+}
+
+pedroni_tr_res <- pedroni99m(
+  X         = X_cube_tr,
+  kk        = 0,
+  type.stat = 2,
+  ka        = 2
+)
+
+ped_stat_tr <- pedroni_tr_res$STATISTIC
+
+pedroni_tr_df <- data.frame(
+  test         = rownames(ped_stat_tr),
+  empirical    = ped_stat_tr[, "empirical"],
+  standardized = ped_stat_tr[, "standardized"],
+  row.names    = NULL
+)
+
+pedroni_tr_df$p_value <- 2 * (1 - pnorm(abs(pedroni_tr_df$standardized)))
+pedroni_tr_disp <- pedroni_tr_df %>%
+  mutate(
+    p_value = add_stars(p_value),
+    test = dplyr::recode(test,
+      "nipanel"      = "Panel v-Statistic",
+      "rhopanel"     = "Panel rho-Statistic",
+      "tpanelnonpar" = "Panel PP-Statistic",
+      "tpanelpar"    = "Panel ADF-Statistic",
+      "rhogroup"     = "Group rho-Statistic",
+      "tgroupnonpar" = "Group PP-Statistic",
+      "tgrouppar"    = "Group ADF-Statistic"
+    )
+  ) %>%
+  setNames(c("Test Statistic", "Empirical Value", "Standardized Value", "P-value"))
+
+stargazer(
+  pedroni_tr_disp,
+  summary   = FALSE,
+  rownames  = FALSE,
+  
+  notes     = c(
+    "Dependent variable is original FDI/GDP; regressors are centred/scaled transformations.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits    = 4,
+  title     = "Pedroni (1999) Panel Cointegration Test (Transformed Variables)",
+  label     = "tab:pedroni_transformed",
+  out       = "Output/pedroni_test_transformed.tex"
+)
+```
+
+
+# Westerlund
+```{r westerlund-test}
+dep_var  <- "fdi_gdp"
+x_cols   <- setdiff(vars_to_test, dep_var) 
+key_x_cols <- c("gdpgr_wb", "ps_vdem", "ps_gdpgr")
+
+res_boot <- westerlund_bootstrap_parallel(
+  data    = panel_clean,
+  id_col  = "country",
+  time_col = "year",
+  y_col   = dep_var,
+  x_cols  = key_x_cols,
+  lags    = 1,
+  leads   = 1,
+  bandwidth = 3,
+  constant  = TRUE,
+  trend     = FALSE,
+  demean    = TRUE,
+  moment_method = "table"
+)
+
+westerlund_summary <- summary_westerlund(res_boot)
+westerlund_summary
+
+stats_df_disp <- westerlund_summary$Statistics %>%
+  mutate(
+    # Format P-values with stars
+    P_Value = paste(sprintf("%.4f", P_Value), trimws(Signif)),
+    
+    # Recode statistics to be more descriptive
+    Statistic = dplyr::recode(Statistic,
+      "Gt" = "Group Mean t-stat (Gt)",
+      "Ga" = "Group Mean alpha-stat (Ga)",
+      "Pt" = "Panel t-stat (Pt)",
+      "Pa" = "Panel alpha-stat (Pa)"
+    )
+  ) %>%
+  # Select and Rename columns
+  select(Statistic, Value, Z_Value, P_Value) %>%
+  setNames(c("Test Statistic", "Value", "Z-Statistic", "P-value"))
+
+stargazer(
+  stats_df_disp,
+  summary      = FALSE,
+  rownames     = FALSE,
+  
+  notes = c(
+    "P-values based on 100 bootstrap replications; robust to cross-sectional dependence.", 
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align  = "l",
+  notes.append = FALSE,
+  digits       = 4,
+  title        = "Westerlund (2007) Panel Cointegration Test (Bootstrap)",
+  label        = "tab:westerlund_boot",
+  out          = "Output/westerlund_boot.tex"
+)
+
+coef_df <- westerlund_summary$Coefficients
+
+coef_df_disp <- coef_df %>%
+  mutate(
+    variable = dplyr::recode(Variable, # Note: Input column is capitalized 'Variable' in your snippet
+      "gdpgr_wb"     = "GDP Growth",
+      "ps_vdem"      = "Political Stability (V-Dem)",
+      "ps_gdpgr"     = "Pol. Stability $\\times$ GDP Growth",
+      # Add others if they appear in the model (e.g. gdp_wb_log, etc.)
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "cpi_imf"      = "CPI (Inflation)",
+      "corrupt_vdem" = "Corruption Control",
+      "fdi_gdp"      = "FDI (% of GDP)",
+      "trade_open"   = "Trade Openness",
+      "unemp_ilo"    = "Unemployment"
+    )
+  ) %>%
+  # Select and Rename only the relevant columns
+  select(variable, Long_Run_Beta) %>%
+  setNames(c("Variable", "Long-Run Beta"))
+
+stargazer(
+  coef_df_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  notes    = "Estimates based on Westerlund Mean Group estimator.", 
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Mean Group Estimated Long-Run Coefficients (Westerlund)",
+  label    = "tab:westerlund_mg",
+  out      = "Output/westerlund_mg.tex"
+)
+
+# Plot bootstrap distributions + 5% critical values
+p <- plot_westerlund(res_boot)
+
+ggsave(
+  filename = "Output/westerlund_boot_plot.png",
+  plot     = p,
+  width    = 8,
+  height   = 6,
+  dpi      = 300
+)
+```
+
+```{r westerlund-test-transformed} 
+dep_var_tr_w  <- "fdi_gdp"
+key_x_cols_tr_w <- c("g_c", "ps_c", "ps_gdpgr_c")
+
+res_boot_tr <- westerlund_bootstrap_parallel(
+  data          = panel_clean,
+  id_col        = "country",
+  time_col      = "year",
+  y_col         = dep_var_tr_w,
+  x_cols        = key_x_cols_tr_w,
+  lags          = 1,
+  leads         = 1,
+  bandwidth     = 3,
+  constant      = TRUE,
+  trend         = FALSE,
+  demean        = TRUE,
+  moment_method = "table"
+)
+
+westerlund_summary_tr <- summary_westerlund(res_boot_tr)
+westerlund_summary_tr
+
+stats_tr_disp <- westerlund_summary_tr$Statistics %>%
+  mutate(
+    # Add stars to P-value
+    P_Value = paste(sprintf("%.4f", P_Value), trimws(Signif)),
+    
+    # Recode statistics to be more descriptive
+    Statistic = dplyr::recode(Statistic,
+      "Gt" = "Group Mean t-stat (Gt)",
+      "Ga" = "Group Mean alpha-stat (Ga)",
+      "Pt" = "Panel t-stat (Pt)",
+      "Pa" = "Panel alpha-stat (Pa)"
+    )
+  ) %>%
+  # Select and Rename columns
+  select(Statistic, Value, Z_Value, P_Value) %>%
+  setNames(c("Test Statistic", "Value", "Z-Statistic", "P-value"))
+
+stargazer(
+  stats_tr_disp,
+  summary      = FALSE,
+  rownames     = FALSE,
+  
+  notes        = c(
+    "Regressors are centred/scaled transformations of the original variables.",
+    "P-values based on 100 bootstrap replications; robust to cross-sectional dependence.",
+    "*, **, *** indicate significance at the 5%, 1%, and 0.1% levels respectively."
+  ),
+  notes.align  = "l",
+  notes.append = FALSE,
+  digits       = 4,
+  title        = "Westerlund (2007) Panel Cointegration Test (Bootstrap, Transformed Variables)",
+  label        = "tab:westerlund_boot_transformed",
+  out          = "Output/westerlund_boot_transformed.tex"
+)
+
+coef_tr_disp <- westerlund_summary_tr$Coefficients %>%
+  mutate(
+    # Recode transformed variable names to readable labels
+    Variable = dplyr::recode(Variable,
+      "ps_c"         = "Political Stability (V-Dem)",
+      "g_c"          = "GDP Growth",
+      "ps_gdpgr_c"   = "Pol. Stability $\\times$ GDP Growth",
+      "gdp_wb_log"   = "Log GDP (millions)",
+      "cpi_std"      = "CPI (Inflation)",
+      "corrupt_std"  = "Corruption Control",
+      "trade_std"    = "Trade Openness",
+      "unemp_std"    = "Unemployment"
+    )
+  ) %>%
+  # Select and Rename columns
+  select(Variable, Long_Run_Beta) %>%
+  setNames(c("Variable", "Long-Run Beta"))
+
+stargazer(
+  coef_tr_disp,
+  summary  = FALSE,
+  rownames = FALSE,
+  
+  notes    = c(
+    "Long-run mean group coefficients using centred/scaled regressors."
+  ),
+  notes.align = "l",
+  notes.append = FALSE,
+  digits   = 4,
+  title    = "Mean Group Estimated Long-Run Coefficients (Westerlund, Transformed Variables)",
+  label    = "tab:westerlund_mg_transformed",
+  out      = "Output/westerlund_mg_transformed.tex"
+)
+
+p_tr <- plot_westerlund(res_boot_tr)
+
+ggplot2::ggsave(
+  filename = "Output/westerlund_boot_plot_transformed.png",
+  plot     = p_tr,
+  width    = 8,
+  height   = 6,
+  dpi      = 300
+)
+```

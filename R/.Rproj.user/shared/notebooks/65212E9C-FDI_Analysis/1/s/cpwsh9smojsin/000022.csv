@@ -1,0 +1,19 @@
+"0","#vars_to_test <- c(""fdi_wb"", ""gdp_wb"", ""ps_wb"", ""gdpgr_wb"", ""cpi_wb"", ""cpi_index_wb"", ""unemp_wb"", ""export_wb"", ""import_wb"", ""corrupt_wb"", ""import_wto"", ""export_wto"", ""ps_vdem"", ""corrupt_vdem"", ""fdi_un"", ""fdi_gdp"", ""ps_gdpgr"", ""trade_open"", ""cpi_imf"", ""unemp_imf"")"
+"0","vars_to_test <- c(""gdp_wb"", ""gdpgr_wb"", ""cpi_imf"", ""ps_vdem"", ""corrupt_vdem"", ""fdi_gdp"", ""ps_gdpgr"", ""trade_open"")"
+"0",""
+"0","panel %>% "
+"0","  select(country, vars_to_test) %>%"
+"0","  group_by(country) %>%"
+"0","  summarise(across(everything(), ~ mean(is.na(.)))) "
+"2","G2;H2;Warningh: [38;5;232mUsing an external vector in selections was deprecated in tidyselect 1.1.0.
+[36mℹ[38;5;232m Please use `all_of()` or `any_of()` instead.
+  # Was:
+  data %>% select(vars_to_test)
+
+  # Now:
+  data %>% select(all_of(vars_to_test))
+
+See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
+[90mThis warning is displayed once every 8 hours.[38;5;232m
+[90mCall `lifecycle::last_lifecycle_]8;;ide:run:warnings()warnings()]8;;` to see where this warning was generated.[38;5;232m[39mg
+"

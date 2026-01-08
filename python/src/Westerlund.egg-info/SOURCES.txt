@@ -1,0 +1,9 @@
+LICENSE
+pyproject.toml
+src/Westerlund/__init__.py
+src/Westerlund/main.py
+src/Westerlund.egg-info/PKG-INFO
+src/Westerlund.egg-info/SOURCES.txt
+src/Westerlund.egg-info/dependency_links.txt
+src/Westerlund.egg-info/requires.txt
+src/Westerlund.egg-info/top_level.txt

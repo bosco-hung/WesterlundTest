@@ -1,0 +1,53 @@
+# Westerlund: Panel Cointegration Testing in R
+
+`Westerlund` is an R package implementing a functional approximation of the four panel cointegration tests developed by **Westerlund (2007)**. The Westerlund test evaluates the null hypothesis of **no cointegration** by testing whether the error-correction term in a conditional panel ECM is equal to zero. If the null is rejected, there is evidence of a long-run equilibrium relationship between the variables.
+
+## Key Features
+
+The package replicates the logic of the Westerlund (2007) methodology, including:
+* **Four Test Statistics**: Computes $G_t$, $G_a$, $P_t$, and $P_a$.
+* **Flexible Dynamics**: Allows for unit-specific lag and lead lengths.
+* **Automated Selection**: Built-in AIC/BIC selection logic for optimal lag and lead lengths.
+* **Bootstrap Procedure**: Robust p-values to handle cross-sectional dependence.
+* **Kernel Estimation**: Bartlett kernel long-run variance estimation.
+* **Gap Handling**: Strict time-series continuity checks to ensure valid econometric results.
+
+
+
+## Installation
+
+You can install the development version of `Westerlund` from GitHub using the `devtools` package:
+
+```r
+# Install devtools if you haven't already
+# install.packages("devtools")
+
+# Install Westerlund
+devtools::install_github("bosco-hung/Westerlund/R", build_vignettes = TRUE)
+
+## Qucik Start
+```r
+library(Westerlund)
+
+# Ensure data is sorted by ID and Time
+results <- westerlund_test(
+  data = my_data,
+  yvar = "ln_gdp",
+  xvars = c("ln_energy", "ln_capital"),
+  idvar = "country",
+  timevar = "year",
+  constant = TRUE,
+  trend = FALSE,
+  lags = c(1, 3),      # AIC search between 1 and 3 lags
+  leads = c(0, 2),     # AIC search between 0 and 2 leads
+  bootstrap = 100,     # Run 100 bootstrap replications
+  lrwindow = 3         # Bartlett kernel window size
+)
+
+# View the results table
+print(results)
+```
+
+## References
+Westerlund, J. (2007). Testing for Error Correction in Panel Data. Oxford Bulletin of Economics and Statistics, 69(6), 709-748.
+Persyn, D., & Westerlund, J. (2008). Error-Correction-Based Cointegration Tests for Panel Data. Stata Journal, 8(2), 232-241.

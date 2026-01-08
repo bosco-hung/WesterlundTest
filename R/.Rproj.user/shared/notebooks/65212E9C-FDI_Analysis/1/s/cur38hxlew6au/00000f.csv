@@ -1,0 +1,25 @@
+"0","vdem_panel_raw_uncleaned <- read_csv(""Data/V-Dem/V-Dem-CY-FullOthers-v15_csv/V-Dem-CY-Full+Others-v15.csv"") %>%"
+"0","  filter(year >= 1990) %>%"
+"0","  select(c(country_text_id, year, e_wbgi_pve, v2x_corr)) %>%"
+"0","  rename("
+"0","    iso3c   = country_text_id,"
+"0","    ps_vdem = e_wbgi_pve,"
+"0","    corrupt_vdem = v2x_corr"
+"0","  )"
+"2","G2;H2;Warningh: [38;5;232mOne or more parsing issues, call `problems()` on your data frame for details, e.g.:
+  dat <- vroom(...)
+  problems(dat)[39mg
+"
+"2","[1mRows: [22m[34m27913[39m [1mColumns: [22m[34m4607[39m
+"
+"2","[36m──[39m [1mColumn specification[22m [36m─────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m    (28): country_name, country_text_id, histname, v2lpname, v2slpname, v2tlpn...
+[32mdbl[39m  (4576): country_id, year, project, historical, codingstart, codingend, codin...
+[33mlgl[39m     (2): v3elupvtlg, v3elupvtsm
+[34mdate[39m    (1): historical_date
+"
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message.
+"

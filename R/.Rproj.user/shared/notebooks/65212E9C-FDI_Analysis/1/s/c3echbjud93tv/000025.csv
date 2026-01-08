@@ -1,0 +1,80 @@
+"0","imf_ls_panel_raw_uncleaned <- read_csv(""Data/IMF/dataset_2025-12-04T12_29_16.087554426Z_DEFAULT_INTEGRATION_IMF.STA_LS_9.0.0.csv"") %>%"
+"0","  filter(FREQUENCY == ""Annual"" & INDICATOR == ""Unemployment rate"" & TYPE_OF_TRANSFORMATION == ""Percent"") %>%"
+"0","  mutate("
+"0","    COUNTRY = case_when("
+"0","      COUNTRY == ""Hong Kong Special Administrative Region, People's Republic of China"" ~ ""Hong Kong"","
+"0","      COUNTRY == ""Macao Special Administrative Region, People's Republic of China"" ~ ""Macao"","
+"0","      TRUE ~ COUNTRY"
+"0","    )) %>%"
+"0","  mutate(iso3c = countrycode(sourcevar = `COUNTRY`, "
+"0","                             origin = ""country.name"", "
+"0","                             destination = ""iso3c"")) %>%"
+"0","  select(iso3c, TIME_PERIOD, OBS_VALUE) %>%"
+"0","  rename("
+"0","    year = TIME_PERIOD,"
+"0","    unemp_imf = OBS_VALUE"
+"0","  ) %>%"
+"0","  # Drop rows with NA iso3c (unmatched countries)"
+"0","  filter(!is.na(iso3c)) %>%"
+"0","  # Make year a numeric variable"
+"0","  mutate(year = as.integer(year))"
+"2","[1mRows: [22m[34m392157[39m [1mColumns: [22m[34m42[39m
+"
+"2","[36m──[39m [1mColumn specification[22m [36m─────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m  (23): COUNTRY, INDICATOR, TYPE_OF_TRANSFORMATION, FREQUENCY, TIME_PERIOD, SC...
+[32mdbl[39m   (1): OBS_VALUE
+[33mlgl[39m  (16): PRECISION, DECIMALS_DISPLAYED, SOC_CONCEPTS, TRANSFORMATION, UNIT, IFS...
+[34mdttm[39m  (2): PUBLICATION_DATE, UPDATE_DATE
+"
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message.
+"
+"2","G2;H2;Warningh: [38;5;232mThere were 2 warnings in `mutate()`.
+The first warning was:[39m
+[38;5;232m[36mℹ[38;5;232m In argument: `iso3c = countrycode(sourcevar = COUNTRY, origin = ""country.name"",
+  destination = ""iso3c"")`.[39m
+Caused by warning:
+[33m![39m Some values were not matched unambiguously: Anguilla, United Kingdom-British Overseas Territory, Aruba, Kingdom of the Netherlands, Montserrat, United Kingdom-British Overseas Territory
+[38;5;232m[36mℹ[38;5;232m Run ]8;;ide:run:dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;]8;; to see the 1 remaining warning.[39mg
+"
+"0","imf_cpi_panel_raw_uncleaned <- read_csv(""Data/IMF/dataset_2025-12-04T12_44_09.178716263Z_DEFAULT_INTEGRATION_IMF.STA_CPI_5.0.0.csv"") %>%"
+"0","  filter(FREQUENCY == ""Annual"" & INDEX_TYPE == ""Consumer price index (CPI)"" & TYPE_OF_TRANSFORMATION == ""Standard reference period (2010=100), Index"" & COICOP_1999 == ""All Items"") %>%"
+"0","  mutate("
+"0","    COUNTRY = case_when("
+"0","      COUNTRY == ""Hong Kong Special Administrative Region, People's Republic of China"" ~ ""Hong Kong"","
+"0","      COUNTRY == ""Macao Special Administrative Region, People's Republic of China"" ~ ""Macao"","
+"0","      TRUE ~ COUNTRY"
+"0","    )) %>%"
+"0","  mutate(iso3c = countrycode(sourcevar = `COUNTRY`, "
+"0","                             origin = ""country.name"", "
+"0","                             destination = ""iso3c"")) %>%"
+"0","  select(iso3c, TIME_PERIOD, OBS_VALUE) %>%"
+"0","  rename("
+"0","    year = TIME_PERIOD,"
+"0","    cpi_imf = OBS_VALUE"
+"0","  ) %>%"
+"0","  # Drop rows with NA iso3c (unmatched countries)"
+"0","  filter(!is.na(iso3c)) %>%"
+"0","  # Make year a numeric variable"
+"0","  mutate(year = as.integer(year))"
+"2","[1mRows: [22m[34m6050884[39m [1mColumns: [22m[34m7[39m
+"
+"2","[36m──[39m [1mColumn specification[22m [36m─────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m (6): COUNTRY, INDEX_TYPE, COICOP_1999, TYPE_OF_TRANSFORMATION, FREQUENCY, TIM...
+[32mdbl[39m (1): OBS_VALUE
+"
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message.
+"
+"2","G2;H2;Warningh: [38;5;232mThere were 2 warnings in `mutate()`.
+The first warning was:[39m
+[38;5;232m[36mℹ[38;5;232m In argument: `iso3c = countrycode(sourcevar = COUNTRY, origin = ""country.name"",
+  destination = ""iso3c"")`.[39m
+Caused by warning:
+[33m![39m Some values were not matched unambiguously: Anguilla, United Kingdom-British Overseas Territory, Aruba, Kingdom of the Netherlands, Curaçao, Kingdom of the Netherlands, Kosovo, Republic of, Montserrat, United Kingdom-British Overseas Territory, Sint Maarten, Kingdom of the Netherlands
+[38;5;232m[36mℹ[38;5;232m Run ]8;;ide:run:dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;]8;; to see the 1 remaining warning.[39mg
+"

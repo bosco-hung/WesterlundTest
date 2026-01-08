@@ -1,0 +1,97 @@
+"0","ips_results <- lapply(vars_to_test, function(v) {"
+"0","  f <- as.formula(paste(v, ""~ 1""))"
+"0","  purtest(f, data = pdata,"
+"0","          index = ""country"","
+"0","          test = ""ips"","
+"0","          exo  = ""intercept"","
+"0","          pmax = 3,"
+"0","          lags = ""AIC"")"
+"0","})"
+"0","names(ips_results) <- vars_to_test"
+"0","ips_results"
+"1","$gdp_wb
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -7.9995, p-value = 6.246e-16
+alternative hypothesis: stationarity
+
+
+$gdpgr_wb
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -4.8143, p-value = 7.386e-07
+alternative hypothesis: stationarity
+
+
+$cpi_imf
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = 6.2453, p-value = 1
+alternative hypothesis: stationarity
+
+
+$ps_vdem
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -3.864, p-value = 5.577e-05
+alternative hypothesis: stationarity
+
+
+$corrupt_vdem
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = 0.44371, p-value = 0.6714
+alternative hypothesis: stationarity
+
+
+$fdi_gdp
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -9.1096, p-value < 2.2e-16
+alternative hypothesis: stationarity
+
+
+$ps_gdpgr
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -7.3236, p-value = 1.207e-13
+alternative hypothesis: stationarity
+
+
+$trade_open
+
+	Im-Pesaran-Shin Unit-Root Test (ex. var.: Individual Intercepts)
+
+data:  f
+Wtbar = -0.48226, p-value = 0.3148
+alternative hypothesis: stationarity
+
+
+"
+"0","# Extract the IPS statistic and p-value for each variable"
+"0","ips_stat  <- sapply(ips_results, function(x) x$statistic)"
+"0","ips_pval  <- sapply(ips_results, function(x) x$p.value)"
+"0",""
+"0","# Build a clean results table"
+"0","ips_table <- data.frame("
+"0","  variable  = colnames(ips_stat),"
+"0","  statistic = as.numeric(ips_stat[""statistic"", ]),"
+"0","  p_value   = as.numeric(ips_stat[""p.value"", ]),"
+"0","  row.names = NULL"
+"0",")"
+"0","ips_table$reject_H0_5pct <- ips_table$p_value < 0.05"
+"0","ips_table"

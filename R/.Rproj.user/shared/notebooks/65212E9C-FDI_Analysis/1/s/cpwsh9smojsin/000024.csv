@@ -1,0 +1,74 @@
+"0","pdata <- panel %>%"
+"0","  group_by(country) %>%"
+"0","  filter(!any(if_any(all_of(vars_to_test), is.na))) %>%"
+"0","  ungroup() %>%"
+"0","  pdata.frame(index = c(""country"", ""year""))"
+"0","  "
+"0",""
+"0","table(index(pdata), useNA = ""ifany"")"
+"1","                    year
+country              2002 2003 2004 2005 2006 2007 2008 2009 2010 2011 2012 2013
+  Armenia               1    1    1    1    1    1    1    1    1    1    1    1
+  Azerbaijan            1    1    1    1    1    1    1    1    1    1    1    1
+  Bangladesh            1    1    1    1    1    1    1    1    1    1    1    1
+  Bhutan                1    1    1    1    1    1    1    1    1    1    1    1
+  Cambodia              1    1    1    1    1    1    1    1    1    1    1    1
+  China                 1    1    1    1    1    1    1    1    1    1    1    1
+  India                 1    1    1    1    1    1    1    1    1    1    1    1
+  Iran, Islamic Rep.    1    1    1    1    1    1    1    1    1    1    1    1
+  Iraq                  1    1    1    1    1    1    1    1    1    1    1    1
+  Israel                1    1    1    1    1    1    1    1    1    1    1    1
+  Japan                 1    1    1    1    1    1    1    1    1    1    1    1
+  Jordan                1    1    1    1    1    1    1    1    1    1    1    1
+  Kazakhstan            1    1    1    1    1    1    1    1    1    1    1    1
+  Korea, Rep.           1    1    1    1    1    1    1    1    1    1    1    1
+  Kuwait                1    1    1    1    1    1    1    1    1    1    1    1
+  Kyrgyz Republic       1    1    1    1    1    1    1    1    1    1    1    1
+  Lao PDR               1    1    1    1    1    1    1    1    1    1    1    1
+  Malaysia              1    1    1    1    1    1    1    1    1    1    1    1
+  Mongolia              1    1    1    1    1    1    1    1    1    1    1    1
+  Nepal                 1    1    1    1    1    1    1    1    1    1    1    1
+  Oman                  1    1    1    1    1    1    1    1    1    1    1    1
+  Pakistan              1    1    1    1    1    1    1    1    1    1    1    1
+  Philippines           1    1    1    1    1    1    1    1    1    1    1    1
+  Qatar                 1    1    1    1    1    1    1    1    1    1    1    1
+  Saudi Arabia          1    1    1    1    1    1    1    1    1    1    1    1
+  Singapore             1    1    1    1    1    1    1    1    1    1    1    1
+  Sri Lanka             1    1    1    1    1    1    1    1    1    1    1    1
+  Thailand              1    1    1    1    1    1    1    1    1    1    1    1
+  Turkiye               1    1    1    1    1    1    1    1    1    1    1    1
+  Viet Nam              1    1    1    1    1    1    1    1    1    1    1    1
+                    year
+country              2014 2015 2016 2017 2018 2019 2020
+  Armenia               1    1    1    1    1    1    1
+  Azerbaijan            1    1    1    1    1    1    1
+  Bangladesh            1    1    1    1    1    1    1
+  Bhutan                1    1    1    1    1    1    1
+  Cambodia              1    1    1    1    1    1    1
+  China                 1    1    1    1    1    1    1
+  India                 1    1    1    1    1    1    1
+  Iran, Islamic Rep.    1    1    1    1    1    1    1
+  Iraq                  1    1    1    1    1    1    1
+  Israel                1    1    1    1    1    1    1
+  Japan                 1    1    1    1    1    1    1
+  Jordan                1    1    1    1    1    1    1
+  Kazakhstan            1    1    1    1    1    1    1
+  Korea, Rep.           1    1    1    1    1    1    1
+  Kuwait                1    1    1    1    1    1    1
+  Kyrgyz Republic       1    1    1    1    1    1    1
+  Lao PDR               1    1    1    1    1    1    1
+  Malaysia              1    1    1    1    1    1    1
+  Mongolia              1    1    1    1    1    1    1
+  Nepal                 1    1    1    1    1    1    1
+  Oman                  1    1    1    1    1    1    1
+  Pakistan              1    1    1    1    1    1    1
+  Philippines           1    1    1    1    1    1    1
+  Qatar                 1    1    1    1    1    1    1
+  Saudi Arabia          1    1    1    1    1    1    1
+  Singapore             1    1    1    1    1    1    1
+  Sri Lanka             1    1    1    1    1    1    1
+  Thailand              1    1    1    1    1    1    1
+  Turkiye               1    1    1    1    1    1    1
+  Viet Nam              1    1    1    1    1    1    1
+"
+"0","  "

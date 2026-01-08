@@ -1,0 +1,39 @@
+Package: Westerlund
+Type: Package
+Title: Westerlund (2007) Panel Cointegration Tests
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Bosco", "Hung",
+      email = "bosco.hung@st-annes.ox.ac.uk",
+      role = c("aut", "cre"),
+      comment = (ORCID = "0000-0003-3073-303X")
+    )
+  )
+Description: Implements the four panel cointegration tests developed by 
+    Westerlund (2007) <doi:10.1111/j.1468-0084.2007.00477.x>. The tests are 
+    based on structural rather than residual dynamics and allow for 
+    heterogeneity in both the long-run cointegrating relationship and the 
+    short-run dynamics. The package includes logic for automated lag and 
+    lead selection via AIC/BIC, Bartlett kernel long-run variance 
+    estimation, and a bootstrap procedure to handle cross-sectional 
+    dependence. It also includes a bootstrapping distribution visualization
+    function for diagnostic purposes.
+License: MIT + file LICENSE
+URL: https://github.com/bosco-hung/WesterlundTest
+BugReports: https://github.com/bosco-hung/WesterlundTest/issues
+Depends: 
+    R (>= 4.0.0)
+Imports: 
+    stats,
+    utils
+Suggests: 
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+VignetteBuilder: 
+    knitr
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
+Config/testthat/edition: 3

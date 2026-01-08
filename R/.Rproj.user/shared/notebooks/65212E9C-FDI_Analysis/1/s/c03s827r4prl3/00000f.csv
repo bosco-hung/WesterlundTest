@@ -1,0 +1,35 @@
+"0","uncomtrade_panel_raw_uncleaned <- read_csv(""Data/UN Comtrade/US_FdiFlowsStock.csv"") %>%"
+"0","  filter(Direction==1 & Flow=='08') %>%"
+"0","  # Drop Economy = 1600, 230, 1615, 960, 736"
+"0","  filter(!Economy %in% c(""1600"", ""230"", ""1615"", ""960"", ""736"")) %>%"
+"0","  select(`Economy Label`, Year, `US$ at current prices in millions`) %>%"
+"0","  # change Economy from name to iso3c code"
+"0","  mutate(iso3c = countrycode(sourcevar = `Economy Label`, "
+"0","                             origin = ""country.name"", "
+"0","                             destination = ""iso3c"")) %>%"
+"0","  select(iso3c, Year, `US$ at current prices in millions`) %>%"
+"0","  rename("
+"0","    year = Year,"
+"0","    fdi_un = `US$ at current prices in millions`"
+"0","  ) %>%"
+"0","  # Drop rows with NA iso3c (unmatched countries)"
+"0","  filter(!is.na(iso3c))"
+"2","[1mRows: [22m[34m34952[39m [1mColumns: [22m[34m13[39m
+"
+"2","[36m──[39m [1mColumn specification[22m [36m─────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m (8): Economy, Economy Label, Flow, Flow Label, Direction Label, US$ at curren...
+[32mdbl[39m (4): Year, Direction, US$ at current prices in millions, Percentage of total ...
+[33mlgl[39m (1): Percentage of total world Footnote
+"
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message.
+"
+"2","G2;H2;Warningh: [38;5;232mThere were 2 warnings in `mutate()`.
+The first warning was:[39m
+[38;5;232m[36mℹ[38;5;232m In argument: `iso3c = countrycode(...)`.[39m
+Caused by warning:
+[33m![39m Some values were not matched unambiguously: Africa, Americas, Asia, Asia and Oceania, Australia and New Zealand, BRICS, Caribbean, Central America, Central and Southern Asia, Central Asia, Czechoslovakia, Developed economies, Developed economies: Americas, Developed economies: Asia, Developed economies: Asia and Oceania, Developed economies: Europe, Developed economies: Oceania, Developing economies, Developing economies excluding LDCs, Developing economies: Africa, Developing economies: Americas, Developing economies: Asia, Developing economies: Asia and Oceania, Developing economies: Central Asia, Developing economies: Eastern Asia, Developing economies: Northern Africa, Developing economies: Oceania, Developing economies: South-eastern Asia, Developing economies: Southern Asia, Developing economies: Sub-Saharan Africa, Developing economies: Western Asia, Eastern Africa, Eastern and South-Eastern Asia, Eastern Asia, Eastern Europe, Europe, Europe, Northern America, Australia and New Zealand, European Union (2020 …), G-77 (Group of 77), G20 (Group of Twenty), Kosovo, Latin America and the Caribbean, LDCs (Least developed countries), LDCs: Africa, LDCs: Asia, LLDCs (Landlocked developing countries), Middle Africa, Netherlands Antilles, Northern Africa, Northern America, Northern America and Europe, Northern Europe, Oceania, Oceania excluding Australia and New Zealand, OECD (Organisation for Economic Cooperation and Development), Serbia and Montenegro, SIDS (Small island developing States) (UN-OHRLLS), SIDS: Atlantic and Indian Ocean, SIDS: Caribbean, SIDS: Pacific, South America, South-eastern Asia, Southern Africa, Southern Asia, Southern Europe, Sub-Saharan Africa, Western Africa, Western Asia, Western Asia and Northern Africa, Western Europe, World, Yugoslavia, Soc. Fed. Rep. of
+[38;5;232m[36mℹ[38;5;232m Run ]8;;ide:run:dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;]8;; to see the 1 remaining warning.[39mg
+"

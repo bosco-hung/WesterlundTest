@@ -1,0 +1,67 @@
+"0","# Helper: read single variable file, pivot to long, rename value column"
+"0","read_var <- function(path, varname) {"
+"0","  read_csv(path, show_col_types = FALSE, skip = 4) %>%"
+"0","    # Keep only useful columns: country + year columns"
+"0","    select(`Country Name`, `Country Code`, matches(""^\\d{4}$"")) %>%"
+"0","    pivot_longer("
+"0","      cols      = matches(""^\\d{4}$""),"
+"0","      names_to  = ""year"","
+"0","      values_to = varname"
+"0","    ) %>%"
+"0","    rename("
+"0","      country = `Country Name`,"
+"0","      iso3c   = `Country Code`"
+"0","    ) %>%"
+"0","    mutate("
+"0","      year = as.integer(year)"
+"0","    )"
+"0","}"
+"0",""
+"0","# List of files (paths as you gave)"
+"0","files <- c("
+"0","  fdi_wb     = ""Data/World Bank/API_BX.KLT.DINV.CD.WD_DS2_en_csv_v2_252826/API_BX.KLT.DINV.CD.WD_DS2_en_csv_v2_252826.csv"","
+"0","  gdp_wb     = ""Data/World Bank/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_280632/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_280632.csv"","
+"0","  ps_wb      = ""Data/World Bank/API_PV.EST_DS2_en_csv_v2_126909/API_PV.EST_DS2_en_csv_v2_126909.csv"","
+"0","  gdpgr_wb   = ""Data/World Bank/API_NY.GDP.MKTP.KD.ZG_DS2_en_csv_v2_280803/API_NY.GDP.MKTP.KD.ZG_DS2_en_csv_v2_280803.csv"","
+"0","  cpi_wb     = ""Data/World Bank/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_280663/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_280663.csv"","
+"0","  cpi_index_wb = ""Data/World Bank/API_FP.CPI.TOTL_DS2_en_csv_v2_252184/API_FP.CPI.TOTL_DS2_en_csv_v2_252184.csv"","
+"0","  unemp_wb   = ""Data/World Bank/API_SL.UEM.TOTL.ZS_DS2_en_csv_v2_280820/API_SL.UEM.TOTL.ZS_DS2_en_csv_v2_280820.csv"","
+"0","  export_wb = ""Data/World Bank/API_NE.EXP.GNFS.CD_DS2_en_csv_v2_128505/API_NE.EXP.GNFS.CD_DS2_en_csv_v2_128505.csv"","
+"0","  import_wb = ""Data/World Bank/API_NE.IMP.GNFS.CD_DS2_en_csv_v2_280604/API_NE.IMP.GNFS.CD_DS2_en_csv_v2_280604.csv"","
+"0","  #trade_open   = ""Data/World Bank/API_NE.TRD.GNFS.ZS_DS2_en_csv_v2_242492/API_NE.TRD.GNFS.ZS_DS2_en_csv_v2_242492.csv"","
+"0","  corrupt_wb = ""Data/World Bank/API_CC.EST_DS2_en_csv_v2_5926/API_CC.EST_DS2_en_csv_v2_5926.csv"""
+"0",")"
+"0",""
+"0","# Read and merge into one panel data frame"
+"0","wb_panel_raw_uncleaned <- imap(files, read_var) %>%"
+"0","  reduce(full_join, by = c(""country"", ""iso3c"", ""year""))"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"
+"2","[38;5;232mNew names:
+[36m•[38;5;232m `` -> `...70`[39m
+"

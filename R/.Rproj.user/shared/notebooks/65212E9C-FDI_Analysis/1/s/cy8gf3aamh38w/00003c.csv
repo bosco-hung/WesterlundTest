@@ -1,0 +1,7 @@
+"1","
+P-values based on Bootstrap Distribution (Robust to CSD).
+
+--- Mean Group Long-Run Coefficients (Beta) ---
+"
+"0","# Plot bootstrap distributions + 5% critical values"
+"0","plot_westerlund(res_boot$Bootstrap_Distribution)"

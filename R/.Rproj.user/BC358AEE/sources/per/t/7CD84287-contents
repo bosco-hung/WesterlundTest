@@ -1,0 +1,95 @@
+\name{shift0}
+\alias{shift0}
+\title{Zero-Filled Lag and Lead Operator}
+\description{
+Shifts a vector forward or backward by a specified number of positions and
+fills out-of-range values with zeros. This helper is designed for recursive and
+bootstrap constructions where missing values should be treated as zero rather
+than \code{NA}, closely mirroring zero-filled lag/lead operations used in
+simulation-based algorithms.
+}
+\usage{
+shift0(v, k)
+}
+\arguments{
+  \item{v}{A numeric vector.}
+
+  \item{k}{Integer. Shift order. Positive values correspond to lags
+  (shifting the series downward, i.e.\ \eqn{t-k}), while negative values
+  correspond to leads (shifting the series upward, i.e.\ \eqn{t+k}).}
+}
+\details{
+This function performs a position-based shift of the input vector \code{v}.
+Unlike strict time-indexed helpers (such as \code{\link{get_lag}}), \code{shift0()}
+does not rely on an explicit time index and does not propagate gaps. Instead, it
+is intended for internal simulation steps where the data are already aligned
+and missing values should be interpreted as zeros.
+
+Let \eqn{n} denote the length of \code{v}. The behaviour is:
+\itemize{
+  \item \code{k = 0}: return \code{v} unchanged,
+  \item \code{k > 0}: lag by \code{k} positions; the first \code{k} elements are zero,
+  \item \code{k < 0}: lead by \code{|k|} positions; the last \code{|k|} elements are zero.
+}
+
+Formally, for \code{k > 0},
+\deqn{
+\text{out}_t =
+\begin{cases}
+0, & t \le k, \\
+v_{t-k}, & t > k,
+\end{cases}
+}
+and for \code{k < 0},
+\deqn{
+\text{out}_t =
+\begin{cases}
+v_{t+|k|}, & t \le n-|k|, \\
+0, & t > n-|k|.
+\end{cases}
+}
+}
+\value{
+A numeric vector of the same length as \code{v}, containing the shifted values
+with zeros inserted where the shift would otherwise go out of range.
+}
+\section{Usage in Simulations}{
+This section explains when and why \code{shift0()} is useful, particularly in
+bootstrap and simulation contexts.
+
+\subsection{Why zero-filling?}{
+In many recursive data-generating processes, missing lagged or lead values are
+interpreted as zero by construction (e.g., initial conditions in AR processes or
+when simulating innovations). \code{shift0()} provides a simple and explicit
+zero-filled alternative to avoid \code{NA} propagation.
+}
+
+\subsection{Difference from get_lag()}{
+Unlike \code{\link{get_lag}}, \code{shift0()} is position-based and ignores
+time indices. Use \code{shift0()} when simulating aligned series where
+zeros are the appropriate boundary condition.
+}
+}
+\examples{
+v <- c(1, 2, 3, 4, 5)
+
+## Lag by one (k = 1)
+shift0(v, 1)
+# [1] 0 1 2 3 4
+
+## Lead by one (k = -1)
+shift0(v, -1)
+# [1] 2 3 4 5 0
+
+## Larger shifts
+shift0(v, 2)
+# [1] 0 0 1 2 3
+
+shift0(v, -2)
+# [1] 3 4 5 0 0
+}
+\seealso{
+\code{\link{WesterlundBootstrap}},
+\code{\link{get_lag}},
+\code{\link{get_diff}}
+}

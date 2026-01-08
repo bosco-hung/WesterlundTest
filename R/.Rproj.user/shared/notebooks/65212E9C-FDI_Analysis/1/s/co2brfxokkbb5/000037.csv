@@ -1,0 +1,22 @@
+"0",""
+"0","missing_by_country <- panel_raw_uncleaned %>%"
+"0","  filter(year >= 2002, year <= 2020) %>%"
+"0","  group_by(country) %>%"
+"0","  summarise("
+"0","    n_years = n(),"
+"0","    n_missing = sum(is.na(across())),"
+"0","    missing_rate = n_missing / (n() * ncol(cur_data()))"
+"0","  ) %>%"
+"0","  arrange(desc(missing_rate))"
+"2","G2;H2;Warningh: [38;5;232mThere were 2 warnings in `summarise()`.
+The first warning was:[39m
+[38;5;232m[36mℹ[38;5;232m In argument: `n_missing = sum(is.na(across()))`.
+[36mℹ[38;5;232m In group 1: `country = ""Afghanistan""`.[39m
+Caused by warning:
+[38;5;232m[33m![38;5;232m Using `across()` without supplying `.cols` was deprecated in dplyr 1.1.0.
+[36mℹ[38;5;232m Please supply `.cols` instead.
+[90mThis warning is displayed once every 8 hours.[38;5;232m
+[90mCall `lifecycle::last_lifecycle_]8;;ide:run:warnings()warnings()]8;;` to see where this warning was generated.[38;5;232m[39m
+[38;5;232m[36mℹ[38;5;232m Run ]8;;ide:run:dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;dplyr::last_dplyr_]8;;ide:run:warnings()warnings()]8;;]8;; to see the 1 remaining warning.[39mg
+"
+"0","missing_by_country"

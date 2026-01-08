@@ -1,0 +1,15 @@
+"0","longrun_model <- plm("
+"0","  fdi_gdp ~ gdp_wb + ps_vdem + gdpgr_wb + ps_gdpgr + trade_open + cpi_imf + corrupt_vdem,"
+"0","  data   = pdata,"
+"0","  model  = ""pooling"""
+"0",")"
+"0",""
+"0","pcdtest(longrun_model, test = ""cd"")   # Pesaran (2004/2015) CD test :contentReference[oaicite:5]{index=5}"
+"1","
+	Pesaran CD test for cross-sectional dependence in panels
+
+data:  fdi_gdp ~ gdp_wb + ps_vdem + gdpgr_wb + ps_gdpgr + trade_open +     cpi_imf + corrupt_vdem
+z = 4.8542, p-value = 1.209e-06
+alternative hypothesis: cross-sectional dependence
+
+"
