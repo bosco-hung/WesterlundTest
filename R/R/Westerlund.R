@@ -72,13 +72,29 @@
 #' \emph{raw} statistics are produced. This is often preferred in finite samples
 #' to account for nuisance parameter sensitivity.
 #'
-#' @return A list containing:
+#' @return A list containing the following components:
 #' \itemize{
-#'   \item \code{gt, ga, pt, pa}: Raw test statistics.
-#'   \item \code{gt_z, ga_z, pt_z, pa_z}: Standardized Z-scores.
-#'   \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: Asymptotic left-tail p-values.
-#'   \item \code{gt_pvalboot, ga_pvalboot, pt_pvalboot, pa_pvalboot}: Bootstrap
-#'     p-values (only when \code{bootstrap > 0}).
+#'   \item \code{test_stats}: A named numeric vector containing:
+#'     \itemize{
+#'       \item \code{gt, ga, pt, pa}: Raw test statistics.
+#'       \item \code{gt_z, ga_z, pt_z, pa_z}: Standardized Z-scores.
+#'       \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: Asymptotic left-tail p-values.
+#'     }
+#'   \item \code{boot_pvals}: A named list (\code{gt, ga, pt, pa}) of bootstrap p-values, 
+#'     calculated only if \code{bootstrap > 0}.
+#'   \item \code{bootstrap_distributions}: A matrix of dimension \code{[bootstrap x 4]} 
+#'     containing the distribution of the four statistics across replications.
+#'   \item \code{unit_data}: A \code{data.frame} containing unit-specific results including 
+#'     individual alpha coefficients (\code{ai}), beta estimates (\code{betai}), and 
+#'     standard errors.
+#'   \item \code{mean_group}: A list containing:
+#'     \itemize{
+#'       \item \code{mg_alpha}: The Mean Group estimate of the error correction coefficient.
+#'       \item \code{se_mg_alpha}: Standard error of the MG alpha.
+#'       \item \code{mg_betas}: Vector of Mean Group estimates for the long-run regressors.
+#'       \item \code{se_mg_betas}: Standard errors for the MG betas.
+#'     }
+#'   \item \code{settings}: A list of internal parameters and lag/lead selections used.
 #' }
 #'
 #' @references

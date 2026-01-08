@@ -79,12 +79,21 @@ asymptotic (left-tail) p-values. If \code{bootstrap > 0},
 it additionally produces bootstrap p-values for the raw statistics.
 }
 \value{
-A list containing:
+A list containing the following components:
 \itemize{
-  \item \code{gt, ga, pt, pa}: raw test statistics,
-  \item \code{gt_z, ga_z, pt_z, pa_z}: standardized Z-scores,
-  \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: asymptotic left-tail p-values,
-  \item \code{gt_pvalboot, ga_pvalboot, pt_pvalboot, pa_pvalboot}: bootstrap p-values (if \code{bootstrap > 0}).
+  \item \code{test_stats}: A numeric vector containing:
+    \itemize{
+      \item \code{gt, ga, pt, pa}: Raw test statistics.
+      \item \code{gt_z, ga_z, pt_z, pa_z}: Standardized Z-scores.
+      \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: Asymptotic left-tail p-values.
+    }
+  \item \code{boot_pvals}: A list containing \code{gt_pvalboot, ga_pvalboot, pt_pvalboot, pa_pvalboot}
+    (only populated if \code{bootstrap > 0}).
+  \item \code{bootstrap_distributions}: A matrix of the bootstrap replicates for each statistic.
+  \item \code{unit_data}: A \code{data.frame} with unit-specific ECM results (alpha and beta estimates).
+  \item \code{mean_group}: A list containing the Mean Group estimates (\code{mg_alpha}, \code{mg_betas})
+    and their respective standard errors.
+  \item \code{settings}: A list of the lag/lead specifications and internal parameters used.
 }
 }
 \section{Vignette}{
@@ -119,9 +128,6 @@ res_plain <- westerlund_test(
   noisily    = FALSE,
   lrwindow   = 2
 )
-
-## Raw statistics
-c(Gt = res_plain$gt, Ga = res_plain$ga, Pt = res_plain$pt, Pa = res_plain$pa)
 }
 }
 
