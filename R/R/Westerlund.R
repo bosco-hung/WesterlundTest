@@ -1539,7 +1539,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       # This identifies which time blocks this specific ID uses
       required_len <- Ti0 + maxlag + maxlead + 2
       idx0 <- shuffled_t_idx[1:required_len]
-      
+
       # Now pull the support data using these indices
       e_b <- e_sup[idx0]
       cdX_b <- cdX_sup[idx0, , drop = FALSE]
@@ -1656,8 +1656,8 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
 #' NA-Padded Lag and Lead Operator
 #'
 #' Shifts a vector forward or backward by a specified number of positions and
-#' fills out-of-range values with \code{NA}. This helper is designed for 
-#' position-based transformations where missing values should be explicitly 
+#' fills out-of-range values with \code{NA}. This helper is designed for
+#' position-based transformations where missing values should be explicitly
 #' propagated as \code{NA}.
 #'
 #' @param v A vector (typically numeric, but can be any type).
@@ -1668,8 +1668,8 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
 #' @details
 #' This function performs a position-based shift of the input vector \code{v}.
 #' Unlike strict time-indexed helpers (such as \code{\link{get_lag}}), \code{shiftNA()}
-#' does not rely on an explicit time index and does not propagate gaps based on 
-#' timestamps. Instead, it performs a simple index shift, padding the 
+#' does not rely on an explicit time index and does not propagate gaps based on
+#' timestamps. Instead, it performs a simple index shift, padding the
 #' resulting empty slots with \code{NA}.
 #'
 #' Let $n$ denote the length of \code{v}. The behavior is:
@@ -1700,22 +1700,22 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
 #' with \code{NA} inserted where the shift would otherwise go out of range.
 #'
 #' @section Usage and Propagation:
-#' This section explains the implications of using \code{NA} padding in 
+#' This section explains the implications of using \code{NA} padding in
 #' recursive or difference-based calculations.
 #'
 #' \bold{Why NA-padding?}
 #' \cr
-#' Using \code{NA} is the standard behavior in R for out-of-bounds operations. 
-#' It ensures that subsequent calculations (like \code{v - shiftNA(v, 1)}) 
-#' correctly result in \code{NA} for the boundary cases, preventing the 
-#' accidental use of arbitrary values (like zero) in statistical estimations 
+#' Using \code{NA} is the standard behavior in R for out-of-bounds operations.
+#' It ensures that subsequent calculations (like \code{v - shiftNA(v, 1)})
+#' correctly result in \code{NA} for the boundary cases, preventing the
+#' accidental use of arbitrary values (like zero) in statistical estimations
 #' unless explicitly intended.
 #'
 #' \bold{Difference from get_lag()}
 #' \cr
-#' Unlike \code{\link{get_lag}}, which may handle time-series objects or 
-#' specific index matching, \code{shiftNA()} is a "dumb" position shifter. 
-#' It is faster for internal loops where the user guarantees that the 
+#' Unlike \code{\link{get_lag}}, which may handle time-series objects or
+#' specific index matching, \code{shiftNA()} is a "dumb" position shifter.
+#' It is faster for internal loops where the user guarantees that the
 #' vector is already sorted and contiguous.
 #'
 #' @examples

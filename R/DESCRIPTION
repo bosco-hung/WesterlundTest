@@ -12,7 +12,7 @@ Authors@R: c(
   )
 Description: Implements a functional approximation of the four panel
     cointegration tests developed by Westerlund (2007)
-    <doi:10.1111/j.1468-0084.2007.00477.x>. The tests are based on structural 
+    <doi:10.1111/j.1468-0084.2007.00477.x>. The tests are based on structural
     rather than residual dynamics and allow for heterogeneity in both the
     long-run cointegrating relationship and the short-run dynamics. The package
     includes logic for automated lag and lead selection via AIC/BIC, Bartlett 
@@ -26,7 +26,8 @@ Depends:
     R (>= 4.0.0)
 Imports: 
     stats,
-    utils
+    utils,
+    scales
 Suggests: 
     testthat (>= 3.0.0),
     knitr,
