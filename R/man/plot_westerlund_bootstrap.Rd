@@ -2,11 +2,11 @@
 \alias{plot_westerlund_bootstrap}
 \title{Plot Bootstrap Distributions for Westerlund ECM Panel Cointegration Tests}
 \description{
-Plots kernel density estimates of the bootstrap distributions for the four
-Westerlund (2007) ECM-based panel cointegration statistics (\eqn{G_t}, \eqn{G_a},
-\eqn{P_t}, \eqn{P_a}) in a 2x2 panel. Each subplot shows the bootstrap density,
-the observed test statistic, and a left-tail critical value at the specified
-confidence level.
+Creates a faceted \code{ggplot2} visualization of the bootstrap distributions for
+the four Westerlund (2007) panel cointegration statistics (\eqn{G_t}, \eqn{G_a},
+\eqn{P_t}, \eqn{P_a}). The plot displays the kernel density of bootstrap
+replications, the observed test statistic as a solid line, and the left-tail
+bootstrap critical value as a dashed line.
 }
 \usage{
 plot_westerlund_bootstrap(
@@ -16,12 +16,11 @@ plot_westerlund_bootstrap(
   colors = list(
     obs = "#D55E00",
     crit = "#0072B2",
-    fill = rgb(0.8, 0.8, 0.8, 0.5),
-    density = "grey"
+    fill = "grey80",
+    density = "grey30"
   ),
-  lwd = list(obs = 3, crit = 2, density = 2),
-  show_grid = TRUE,
-  ...
+  lwd = list(obs = 1, crit = 0.8, density = 0.5),
+  show_grid = TRUE
 )
 }
 \arguments{
@@ -29,74 +28,62 @@ plot_westerlund_bootstrap(
   \code{results$bootstrap_distributions} (a numeric matrix with 4 columns for \code{Gt, Ga, Pt, Pa})
   and \code{results$test_stats} (a named list or vector containing the observed statistics).}
 
-  \item{title}{Character. Overall figure title added to the outer margin.}
+  \item{title}{Character. The main title of the plot.}
 
-  \item{conf_level}{Numeric in (0,1). Left-tail quantile used as the critical value. For example,
-  \code{conf_level = 0.05} plots the 5\% left-tail critical value of each bootstrap distribution.}
+  \item{conf_level}{Numeric in (0,1). Left-tail quantile used as the critical value.
+  For example, \code{conf_level = 0.05} identifies the 5\% left-tail critical value.}
 
-  \item{colors}{A named list of plotting colors. Expected elements are:
-  \code{obs} (observed-stat line), \code{crit} (critical-value line),
-  \code{fill} (density fill), and \code{density} (density outline).}
+  \item{colors}{A named list of colors for plot elements. Expected elements:
+  \code{obs} (observed line), \code{crit} (critical value line),
+  \code{fill} (density area fill), and \code{density} (density curve outline).}
 
-  \item{lwd}{A named list of line widths. Expected elements are:
-  \code{obs}, \code{crit}, and \code{density}.}
+  \item{lwd}{A named list of line widths (or sizes) for \code{obs}, \code{crit}, and \code{density}.}
 
-  \item{show_grid}{Logical. If \code{TRUE}, adds a background grid to each subplot.}
+  \item{show_grid}{Logical. If \code{TRUE}, displays major panel grids.}
 
-  \item{\dots}{Additional arguments passed to \code{\link[stats]{plot.density}} (e.g., \code{xlim}, \code{ylim}).}
 }
 \details{
-\strong{Expected structure of \code{results}.}
-This function assumes a results object with two key components:
-\itemize{
-  \item \code{bootstrap_distributions}: a numeric matrix with 4 columns corresponding to
-  \code{Gt}, \code{Ga}, \code{Pt}, and \code{Pa} (in that order),
-  \item \code{test_stats}: the observed statistics, accessible as \code{results$test_stats[["Gt"]]}
-  etc. (a named vector or list is acceptable).
-}
-If \code{results$bootstrap_distributions} is missing, the function stops with an error.
+\strong{Implementation Details.}
+The function converts the bootstrap distribution matrix into a long-format
+data frame to utilize \code{ggplot2::facet_wrap()}.
 
-\strong{What is plotted.}
-For each statistic:
-\enumerate{
-  \item Non-finite bootstrap draws are removed.
-  \item A kernel density estimate is computed via \code{\link[stats]{density}}.
-  \item The observed statistic is drawn as a solid vertical line.
-  \item The left-tail critical value \code{quantile(data, conf_level)} is drawn as a dashed vertical line.
-  \item A legend reports the observed statistic and the critical value.
+
+
+Unlike the base R version, this
+implementation:
+\itemize{
+  \item Uses \code{ggplot2::geom_density()} for empirical distribution estimation.
+  \item Arranges the four subplots into a 2x2 grid with independent x-axis scales
+  using \code{facet_wrap(~Statistic, scales = "free")}.
+  \item Adds text annotations to each facet displaying the exact numerical
+  values of the Observed Stat and the Critical Value.
 }
-The four plots are arranged in a 2x2 grid using \code{\link[graphics]{par}} with
-\code{mfrow = c(2,2)}. The original graphics parameters are restored on exit.
 
 \strong{Interpretation.}
-The dashed line is a left-tail critical value from the bootstrap distribution.
-If the observed statistic lies to the left of this line (smaller than the
-critical value), it indicates rejection of the null at approximately
-\code{conf_level} under a left-tail decision rule.
+The dashed line represents the bootstrap critical value for a left-tailed test.
+If the observed statistic (solid line) is to the left of the dashed line, it
+indicates a rejection of the null hypothesis (\eqn{H_0}: no cointegration)
+at the \code{conf_level} significance level.
 
 \strong{Dependencies.}
-The legend label uses \code{scales::percent()} for formatting. Ensure the
-\pkg{scales} package is available if you keep this call in your function.
+The function requires the \pkg{ggplot2}, \pkg{tidyr}, and \pkg{scales} packages.
 }
 \value{
-This function is called for its side effect (plotting).
-It invisibly returns \code{NULL}.
+Returns a \code{ggplot} object. This allows the user to apply further
+customizations, such as changing themes (\code{+ theme_bw()}) or adding
+additional layers.
 }
-\section{Visualization Notes}{
-This section explains how \code{plot_westerlund_bootstrap()} visualizes bootstrap
-evidence for the Westerlund ECM test statistics.
-
-\subsection{When is this plot useful?}{
-Bootstrap p-values are often preferred for Westerlund-type tests in finite
-samples or under cross-sectional dependence. Visualizing the bootstrap
-distribution alongside the observed statistic helps diagnose rejection regions
-and potential outliers.
+\section{Inference and Visualization}{
+\subsection{Why use bootstrap distributions?}{
+Westerlund's pooled statistics can be sensitive to nuisance parameters and
+cross-sectional dependence in finite samples. Visualizing the bootstrap
+density provides a more robust reference than asymptotic normal curves.
 }
 
-\subsection{Required inputs}{
-You need a results object that contains a \code{bootstrap_distributions} matrix
-with four columns and a \code{test_stats} container holding the observed
-statistics. These are typically produced by the main \code{westerlund_test} function.
+\subsection{Customization}{
+Because the function returns a \code{ggplot} object, users can modify the
+output easily. For example, to change the theme:
+\code{plot_westerlund_bootstrap(res) + ggplot2::theme_dark()}.
 }
 }
 \examples{
@@ -112,11 +99,14 @@ mock <- list(
   test_stats = list(Gt = -3.1, Ga = -10.2, Pt = -2.7, Pa = -7.8)
 )
 
-## Basic plot (5\% left-tail critical values)
-plot_westerlund_bootstrap(mock)
+## Generate the faceted ggplot
+p <- plot_westerlund_bootstrap(mock)
 
-## Customize critical level and x-limits passed via ...
-plot_westerlund_bootstrap(mock, conf_level = 0.10, xlim = c(-6, 2))
+## Display plot
+if (interactive()) print(p)
+
+## Add ggplot2 layers
+# p + ggplot2::theme_classic()
 }
 \references{
 Westerlund, J. (2007). Testing for error correction in panel data.

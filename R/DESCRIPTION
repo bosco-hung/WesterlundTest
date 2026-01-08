@@ -1,6 +1,6 @@
 Package: Westerlund
 Type: Package
-Title: Westerlund (2007) Panel Cointegration Tests
+Title: Panel Cointegration Tests Based on Westerlund (2007)
 Version: 0.1.0
 Authors@R: c(
     person(
@@ -26,8 +26,13 @@ Depends:
     R (>= 4.0.0)
 Imports: 
     stats,
+    graphics,
+    grDevices,
     utils,
-    scales
+    scales,
+    dplyr,
+    ggplot2,
+    tidyr
 Suggests: 
     testthat (>= 3.0.0),
     knitr,

@@ -1,8 +1,8 @@
 ---
-title: "Westerlund: Westerlund ECM Panel Cointegration Test"
+title: "Westerlund: Panel Cointegration Tests Based on Westerlund (2007)"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Westerlund: Westerlund ECM Panel Cointegration Test}
+  %\VignetteIndexEntry{Westerlund: Panel Cointegration Tests Based on Westerlund (2007)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -14,7 +14,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-# Westerlund: Panel Cointegration Testing in R
+# Westerlund: Panel Cointegration Tests Based on Westerlund (2007)
 
 `Westerlund` is an R package implementing a functional approximation of the four panel cointegration tests developed by **Westerlund (2007)**. Unlike traditional residual-based tests, these statistics are based on structural dynamics. They test the null hypothesis of no cointegration by determining whether the error-correction term in a conditional error-correction model (ECM) is equal to zero.
 
@@ -64,4 +64,5 @@ print(results)
 
 ## References
 Westerlund, J. (2007). Testing for Error Correction in Panel Data. Oxford Bulletin of Economics and Statistics, 69(6), 709-748.
+
 Persyn, D., & Westerlund, J. (2008). Error-Correction-Based Cointegration Tests for Panel Data. Stata Journal, 8(2), 232-241.

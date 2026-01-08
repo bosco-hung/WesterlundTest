@@ -2289,56 +2289,51 @@ westerlund_test_mg <- function(b, V, b2, V2, auto) {
 # ==============================================================================
 #' Plot Bootstrap Distributions for Westerlund ECM Panel Cointegration Tests
 #'
-#' Plots kernel density estimates of the bootstrap distributions for the four
-#' Westerlund (2007) ECM-based panel cointegration statistics (\eqn{G_t}, \eqn{G_a},
-#' \eqn{P_t}, \eqn{P_a}) in a 2x2 panel. Each subplot shows the bootstrap density,
-#' the observed test statistic, and a left-tail critical value at the specified
-#' confidence level.
+#' Creates a faceted \code{ggplot2} visualization of the bootstrap distributions for
+#' the four Westerlund (2007) panel cointegration statistics (\eqn{G_t}, \eqn{G_a},
+#' \eqn{P_t}, \eqn{P_a}). The function renders a 2x2 grid where each panel displays
+#' the kernel density of bootstrap replications, the observed test statistic,
+#' and the left-tail bootstrap critical value.
 #'
-#' @param results A list-like object containing bootstrap output. It must include:
-#'   \code{bootstrap_distributions} (a numeric matrix with 4 columns for \code{Gt, Ga, Pt, Pa})
-#'   and \code{test_stats} (a named list or vector containing the observed statistics).
-#' @param title Character. Overall figure title added to the outer margin.
-#' @param conf_level Numeric in (0,1). Left-tail quantile used as the critical value.
-#'   For example, \code{conf_level = 0.05} plots the 5\% left-tail critical value of
-#'   each bootstrap distribution.
-#' @param colors A named list of plotting colors. Expected elements are:
-#'   \code{obs} (observed-stat line), \code{crit} (critical-value line),
-#'   \code{fill} (density fill), and \code{density} (density outline).
-#' @param lwd A named list of line widths. Expected elements are:
-#'   \code{obs}, \code{crit}, and \code{density}.
-#' @param show_grid Logical. If \code{TRUE}, adds a background grid to each subplot.
-#' @param ... Additional arguments passed to \code{\link[stats]{plot.density}}
-#'   (e.g., \code{xlim}, \code{ylim}).
-#'
+#' @param results A list containing bootstrap output. Must include
+#'   \code{bootstrap_distributions} (a numeric matrix with 4 columns) and
+#'   \code{test_stats} (a named list or vector of observed statistics).
+#' @param title Character. The main title of the plot.
+#' @param conf_level Numeric in (0,1). The significance level for the bootstrap
+#'   critical value (e.g., \code{0.05} for the 5th percentile).
+#' @param colors A named list of colors for plot elements. Expected names:
+#'   \code{obs} (observed line), \code{crit} (critical value line),
+#'   \code{fill} (density area), and \code{density} (density outline).
+#' @param lwd A named list of line widths. Expected names: \code{obs},
+#'   \code{crit}, and \code{density}.
+#' @param show_grid Logical. If \code{TRUE}, displays major panel grids
 #' @details
 #' \strong{Visualizing the Bootstrap Results:}
-#' This function provides a visual diagnostic for the results of the
-#' \code{\link{WesterlundBootstrap}} routine. Because Westerlund's pooled
-#' statistics (especially \eqn{P_a}) can be sensitive to nuisance parameters
-#' in finite samples, the bootstrap distribution offers a more robust reference
-#' than the asymptotic normal distribution.
+#' The bootstrap distribution is used to provide robust inference when asymptotic
+#' normal approximations are unreliable (e.g., in small samples or with specific
+#' nuisance parameters).
 #'
 #'
 #'
 #' \strong{Plotting Logic:}
-#' For each of the four statistics (\eqn{G_t, G_a, P_t, P_a}), the function:
+#' The function transforms the results matrix into a long-format dataframe to
+#' leverage \code{ggplot2} faceting. For each statistic:
 #' \enumerate{
-#'   \item Removes non-finite draws from the bootstrap replications.
-#'   \item Computes a kernel density estimate.
-#'   \item Identifies the \eqn{\alpha}-level left-tail critical value (the
-#'     \code{conf_level} quantile).
-#'   \item Renders a 2x2 grid where the observed statistic is shown as a solid
-#'     vertical line and the bootstrap critical value is a dashed vertical line.
+#'   \item Only finite bootstrap draws are included.
+#'   \item An empirical density is estimated via \code{geom_density}.
+#'   \item The \eqn{\alpha}-level critical value is calculated as the
+#'     \code{conf_level} quantile of the bootstrap distribution.
+#'   \item Text annotations are added to each facet showing the exact
+#'     Observed and Critical Values.
 #' }
 #'
 #' \strong{Interpretation:}
-#' Rejection of the null hypothesis (\eqn{H_0: \text{no cointegration}}) occurs
-#' if the observed statistic (solid line) lies to the \emph{left} of the
-#' bootstrap critical value (dashed line).
+#' The null hypothesis of no cointegration is rejected at the \eqn{\alpha}
+#' level if the observed statistic (solid line) is to the \emph{left} of
+#' the bootstrap critical value (dashed line).
 #'
-#' @return This function is called for its side effect (plotting). It invisibly
-#'   returns \code{NULL}.
+#' @return A \code{ggplot} object. This allows users to further customize the
+#'   plot using standard \code{ggplot2} syntax (e.g., adding themes or labels).
 #'
 #' @references
 #' Westerlund, J. (2007). Testing for error correction in panel data.
@@ -2349,19 +2344,22 @@ westerlund_test_mg <- function(b, V, b2, V2, auto) {
 #'
 #' @examples
 #' \dontrun{
-#' # Mock results object
-#' mock <- list(
-#'   bootstrap_distributions = cbind(
-#'     Gt = rnorm(399, -2, 1), Ga = rnorm(399, -8, 3),
-#'     Pt = rnorm(399, -2, 1), Pa = rnorm(399, -6, 3)
-#'   ),
-#'   test_stats = list(Gt = -3.1, Ga = -10.2, Pt = -2.7, Pa = -7.8)
-#' )
+#' # Assuming 'res' is the output from westerlund_test with bootstrap = 400
+#' p <- plot_westerlund_bootstrap(res, conf_level = 0.05)
 #'
-#' # Generate the 2x2 plot
-#' plot_westerlund_bootstrap(mock, conf_level = 0.05)
+#' # Display the plot
+#' print(p)
+#'
+#' # Further customization
+#' p + ggplot2::theme_bw()
 #' }
 #'
+#'
+#' @import ggplot2
+#' @importFrom tidyr pivot_longer
+#' @importFrom scales percent
+#' @importFrom stats quantile
+#' @importFrom dplyr everything
 #' @export
 plot_westerlund_bootstrap <- function(results,
                                       title = "Westerlund Test: Bootstrap Distributions",
@@ -2369,75 +2367,120 @@ plot_westerlund_bootstrap <- function(results,
                                       colors = list(
                                         obs = "#D55E00",
                                         crit = "#0072B2",
-                                        fill = rgb(0.8, 0.8, 0.8, 0.5),
-                                        density = "grey"
+                                        fill = "grey80",
+                                        density = "grey30"
                                       ),
-                                      lwd = list(obs = 3, crit = 2, density = 2),
-                                      show_grid = TRUE,
-                                      ...) {
+                                      lwd = list(obs = 1, crit = 0.8, density = 0.5),
+                                      show_grid = TRUE) {
 
   # 1. Validation Logic
   if (is.null(results$bootstrap_distributions)) {
     stop("No bootstrap results found in the object. Ensure 'bootstrap' was enabled in the test.")
   }
 
-  stats_names <- c("Gt", "Ga", "Pt", "Pa")
+  # 2. Data Transformation (Wide to Long for Faceting)
+  boot_df <- as.data.frame(results$bootstrap_distributions)
+  colnames(boot_df) <- c("Gt", "Ga", "Pt", "Pa")
 
-  # Save original par settings to restore them later
-  old_par <- par(no.readonly = TRUE)
-  on.exit(par(old_par))
+  # Reshape for ggplot2
+  plot_data <- tidyr::pivot_longer(
+    boot_df,
+    cols = dplyr::everything(),
+    names_to = "Statistic",
+    values_to = "Value"
+  )
 
-  # Set layout: 2x2 grid
-  par(mfrow = c(2, 2), mar = c(4, 4, 3, 1), oma = c(0, 0, 2, 0))
+  # Filter out non-finite draws
+  plot_data <- plot_data[is.finite(plot_data$Value), ]
 
-  for (i in seq_along(stats_names)) {
-    name <- stats_names[i]
+  # 3. Calculate Reference Statistics per Group
+  # Extract observed stats
+  obs_df <- data.frame(
+    Statistic = names(results$test_stats),
+    Observed = unname(unlist(results$test_stats))
+  )
 
-    # Extract and clean data
-    data <- results$bootstrap_distributions[, i]
-    data <- data[is.finite(data)]
+  # Calculate bootstrap critical values (left-tail quantiles)
+  crit_df <- stats::aggregate(
+    Value ~ Statistic,
+    data = plot_data,
+    FUN = function(x) stats::quantile(x, conf_level)
+  )
+  colnames(crit_df)[2] <- "CriticalValue"
 
-    if (length(data) == 0) {
-      plot.new()
-      title(main = paste("No data for", name))
-      next
-    }
+  # Merge for mapping
+  ref_lines <- merge(obs_df, crit_df, by = "Statistic")
 
-    # Calculate Density and Critical Values
-    dens <- density(data)
-    obs <- results$test_stats[[name]]
-    cv_val <- quantile(data, conf_level)
+  # 4. Building the Plot
+  p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$Value)) +
+    # Density Distribution
+    ggplot2::geom_density(
+      fill = colors$fill,
+      color = colors$density,
+      alpha = 0.5,
+      linewidth = lwd$density
+    ) +
 
-    # 2. Plotting Logic
-    plot(dens,
-         main = paste("Statistic:", name),
-         xlab = "Value",
-         col = colors$density,
-         lwd = lwd$density,
-         ...) # Pass extra arguments (like xlim, ylim) to plot
+    # Observed Statistic (Solid Vertical Line)
+    ggplot2::geom_vline(
+      data = ref_lines,
+      ggplot2::aes(xintercept = .data$Observed, color = "Observed"),
+      linetype = "solid",
+      linewidth = lwd$obs
+    ) +
 
-    if (show_grid) grid()
+    # Critical Value (Dashed Vertical Line)
+    ggplot2::geom_vline(
+      data = ref_lines,
+      ggplot2::aes(xintercept = .data$CriticalValue, color = "Critical"),
+      linetype = "dashed",
+      linewidth = lwd$crit
+    ) +
 
-    # Fill density area
-    polygon(dens, col = colors$fill, border = NA)
+    # Display individual values as text inside each facet
+    ggplot2::geom_text(
+      data = ref_lines,
+      ggplot2::aes(
+        x = -Inf, y = Inf,
+        label = paste0("Obs: ", round(.data$Observed, 3),
+                       "\nCV: ", round(.data$CriticalValue, 3))
+      ),
+      hjust = -0.1, vjust = 1.5, size = 3,
+      inherit.aes = FALSE, fontface = "italic"
+    ) +
 
-    # Add Observed Statistic (Solid Line)
-    abline(v = obs, col = colors$obs, lty = 1, lwd = lwd$obs)
+    # Independent X-axis scales for each statistic
+    ggplot2::facet_wrap(~Statistic, scales = "free", ncol = 2) +
 
-    # Add Critical Value (Dashed Line)
-    abline(v = cv_val, col = colors$crit, lty = 2, lwd = lwd$crit)
+    # Legend and Color Customization
+    ggplot2::scale_color_manual(
+      name = NULL,
+      values = c("Observed" = colors$obs, "Critical" = colors$crit),
+      labels = c(
+        "Observed" = "Observed Statistic",
+        "Critical" = paste0(scales::percent(conf_level), " Bootstrap CV")
+      )
+    ) +
 
-    # 3. Legend Customization
-    legend("topright",
-           legend = c(paste("Observed:", round(obs, 3)),
-                      paste(scales::percent(conf_level), "CV:", round(cv_val, 3))),
-           col = c(colors$obs, colors$crit),
-           lty = c(1, 2),
-           lwd = c(lwd$obs, lwd$crit),
-           cex = 0.7,
-           bg = "white")
+    # Labels and Theming
+    ggplot2::labs(
+      title = title,
+      subtitle = paste("H0: No Cointegration | Replications:", nrow(boot_df)),
+      x = "Statistic Value",
+      y = "Kernel Density"
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      legend.position = "bottom",
+      strip.background = ggplot2::element_rect(fill = "grey95", color = "grey80"),
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+    )
+
+  if (!show_grid) {
+    p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_blank())
   }
 
-  # Add main title in the outer margin
-  mtext(title, outer = TRUE, line = 0, font = 2, cex = 1.2)
+  return(p)
 }
