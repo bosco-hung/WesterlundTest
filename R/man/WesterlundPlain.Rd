@@ -103,31 +103,27 @@ The routine computes:
   \item \eqn{P_t}: a pooled t-type statistic based on a pooled \eqn{\hat{\alpha}} and its pooled standard error,
   \item \eqn{P_a}: a pooled scaled statistic using an average effective time dimension.
 }
-
-\strong{Notes on deterministics and trend handling.}
-The function constructs \code{cons} and \code{tren} columns in the working data.
-When \code{constant=TRUE} and \code{trend=TRUE} in non-\code{westerlund} mode,
-the routine includes a detrending/centering adjustment in the long-run variance
-preprocessing steps (as implemented in the code).
-
-\strong{Intended use.}
-For user-facing workflows, call \code{\link{westerlund_test}}; it handles
-input checks, time-continuity checks, minimum-observation checks, optional
-bootstrapping, and formatting of results.
 }
 \value{
-A list containing:
+A nested list containing:
 \itemize{
-  \item \code{Gt}, \code{Ga}, \code{Pt}, \code{Pa}: raw Westerlund test statistics,
-  \item \code{meanlag}, \code{meanlead}: integer means of selected unit-level lags/leads,
-  \item \code{realmeanlag}, \code{realmeanlead}: non-integer means of selected unit-level lags/leads,
-  \item \code{auto}: logical indicating whether lag/lead ranges were supplied (automatic selection used).
+  \item \code{stats}: A list of the four raw Westerlund test statistics:
+    \itemize{
+      \item \code{Gt}: Mean-group tau statistic.
+      \item \code{Ga}: Mean-group alpha statistic.
+      \item \code{Pt}: Pooled tau statistic.
+      \item \code{Pa}: Pooled alpha statistic.
+    }
+  \item \code{indiv_data}: A named list (by Unit ID) of unit-specific results including \code{ai} (alpha), \code{seai} (standard error of alpha), \code{betai} (long-run coefficients), \code{blag}/\code{blead} (chosen dynamics), and \code{ti} (sample size).
+  \item \code{settings}: A list of routine metadata:
+    \itemize{
+      \item \code{meanlag}, \code{meanlead}: Integer averages of the selected unit lags/leads.
+      \item \code{realmeanlag}, \code{realmeanlead}: Numeric averages of the selected unit lags/leads.
+      \item \code{auto}: Logical; \code{TRUE} if automatic selection (ranges) was used.
+    }
 }
 }
 \section{Internal Logic}{
-This section provides a high-level guide to what \code{WesterlundPlain()} does
-internally.
-
 \subsection{Two-stage structure}{
 \strong{Loop 1 (mean-group)} estimates unit-specific ECMs. Each unit produces an
 estimated error-correction coefficient on \eqn{y_{t-1}} and an associated standard
@@ -142,15 +138,9 @@ All lags and differences are computed using strict time-based helpers
 (\code{\link{get_lag}}, \code{\link{get_diff}}). This ensures that gaps in the
 time index propagate as missing values rather than shifting across gaps.
 }
-
-\subsection{Automatic lag/lead selection}{
-If \code{lags} and/or \code{leads} are supplied as ranges, the routine performs a grid search
-over candidate pairs and selects the combination minimizing the information criterion.
-}
 }
 \examples{
 \dontrun{
-## Suppose `touse` has been constructed and inputs validated upstream.
 plain_res <- WesterlundPlain(
   data       = df,
   touse      = touse,
@@ -158,17 +148,17 @@ plain_res <- WesterlundPlain(
   timevar    = "t",
   yvar       = "y",
   xvars      = c("x1","x2"),
-  constant   = TRUE,
-  trend      = FALSE,
   lags       = 1,
-  leads      = 0,
-  lrwindow   = 2,
-  westerlund = FALSE,
-  bootno     = TRUE,
-  noisily    = FALSE
+  leads      = 0
 )
 
-c(Gt = plain_res$Gt, Ga = plain_res$Ga, Pt = plain_res$Pt, Pa = plain_res$Pa)
+# Accessing results from the nested structure:
+stats <- plain_res$stats
+print(c(Gt = stats$Gt, Ga = stats$Ga, Pt = stats$Pt, Pa = stats$Pa))
+
+# Checking unit-specific coefficients for ID '101'
+unit_101 <- plain_res$indiv_data[["101"]]
+print(unit_101$ai)
 }
 }
 \references{

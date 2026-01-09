@@ -652,12 +652,29 @@ get_diff <- function(vec, tvec) {
 #' and \code{\link{get_diff}}, ensuring that time-series gaps correctly result
 #' in \code{NA} values rather than shifts across missing periods.
 #'
-#' @return A list containing:
+#' @return A list containing three main components:
 #' \itemize{
-#'   \item \code{Gt, Ga, Pt, Pa}: The four raw Westerlund test statistics.
-#'   \item \code{meanlag, meanlead}: Integer averages of the selected lags/leads.
-#'   \item \code{realmeanlag, realmeanlead}: Precise (floating-point) averages of lags/leads.
-#'   \item \code{auto}: Logical indicating if automatic lag/lead selection was used.
+#'   \item \code{stats}: A list of the four raw Westerlund test statistics:
+#'     \itemize{
+#'       \item \code{Gt}: Mean-group statistic (tau).
+#'       \item \code{Ga}: Mean-group statistic (alpha).
+#'       \item \code{Pt}: Pooled statistic (tau).
+#'       \item \code{Pa}: Pooled statistic (alpha).
+#'     }
+#'   \item \code{indiv_data}: A named list where each element corresponds to a cross-sectional unit (ID), containing:
+#'     \itemize{
+#'       \item \code{ai}: The estimated speed of adjustment (alpha).
+#'       \item \code{seai}: The standard error of alpha.
+#'       \item \code{betai}: Vector of long-run coefficients.
+#'       \item \code{blag, blead}: The lags and leads selected for that specific unit.
+#'       \item \code{ti}: Number of observations for the unit.
+#'     }
+#'   \item \code{settings}: A list of parameters used in the routine:
+#'     \itemize{
+#'       \item \code{meanlag, meanlead}: Integer averages of the selected lags/leads.
+#'       \item \code{realmeanlag, realmeanlead}: Precise (floating-point) averages of lags/leads.
+#'       \item \code{auto}: Logical indicating if automatic lag/lead selection was active.
+#'     }
 #' }
 #'
 #' @references
