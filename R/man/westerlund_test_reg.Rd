@@ -2,16 +2,19 @@
 \alias{westerlund_test_reg}
 \title{Formatted Coefficient Table for Westerlund Test Reporting}
 \usage{
-westerlund_test_reg(b, V)
+westerlund_test_reg(b, V, verbose = FALSE)
 }
 \arguments{
 \item{b}{A named numeric vector of coefficients.}
 
 \item{V}{A numeric variance-covariance matrix corresponding to \code{b}.}
+
+\item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
 \value{
-This function is called for its side effect (printing).
-It invisibly returns \code{NULL}.
+This function returns a numeric matrix with rows corresponding to the
+coefficients in \code{b} and columns for "Coef.", "Std. Err.", "z", "P>|z|",
+and the 95\% confidence interval bounds.
 }
 \description{
 Internal helper that calculates standard errors, z-statistics, p-values, and
@@ -58,7 +61,7 @@ V <- diag(c(0.03^2, 0.10^2))
 names(b) <- rownames(V) <- colnames(V) <- c("alpha", "beta")
 
 ## Print the formatted table
-westerlund_test_reg(b, V)
+westerlund_test_reg(b, V, verbose = TRUE)
 }
 \seealso{
 \code{\link{westerlund_test_mg}},

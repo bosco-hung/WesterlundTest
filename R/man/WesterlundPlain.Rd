@@ -24,10 +24,9 @@ WesterlundPlain(
   lrwindow = 2,
   westerlund = FALSE,
   bootno = FALSE,
-  noisily = FALSE,
+  indiv.ecm = FALSE,
   debug = FALSE,
-  mg = FALSE,
-  detrend = FALSE
+  verbose = FALSE
 )
 }
 \arguments{
@@ -57,13 +56,11 @@ WesterlundPlain(
 
   \item{bootno}{Logical. If \code{TRUE}, prints a short header and progress dots (intended for higher-level routines).}
 
-  \item{noisily}{Logical. If \code{TRUE}, allows more console output during computation.}
+  \item{indiv.ecm}{Logical. If \code{TRUE}, gets output of individual ECM regressions.}
 
   \item{debug}{Logical. If \code{TRUE}, suppresses progress dots in some branches and can be used for debugging prints.}
 
-  \item{mg}{Logical. Reserved for future use / compatibility; currently not used.}
-
-  \item{detrend}{Logical. Reserved for future use / compatibility; currently not used.}
+  \item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
 \details{
 \strong{Purpose and status.}
@@ -114,7 +111,17 @@ A nested list containing:
       \item \code{Pt}: Pooled tau statistic.
       \item \code{Pa}: Pooled alpha statistic.
     }
-  \item \code{indiv_data}: A named list (by Unit ID) of unit-specific results including \code{ai} (alpha), \code{seai} (standard error of alpha), \code{betai} (long-run coefficients), \code{blag}/\code{blead} (chosen dynamics), and \code{ti} (sample size).
+  \item \code{indiv_data}: A named list where each element corresponds to a cross-sectional unit (ID), containing:
+     \itemize{
+       \item \code{ai}: The estimated speed of adjustment (alpha).
+       \item \code{seai}: The standard error of alpha (adjusted for degrees of freedom).
+       \item \code{betai}: Vector of long-run coefficients (\eqn{\beta = -\lambda / \alpha}).
+       \item \code{blag, blead}: The lags and leads selected for that specific unit.
+       \item \code{ti}: Raw observation count for the unit.
+       \item \code{tnorm}: Degrees of freedom used for normalization.
+       \item \code{reg_coef}: If \code{indiv.ecm = TRUE}, the full coefficient matrix from \code{westerlund_test_reg}.
+     }
+  \item \code{results_df}: A summary \code{data.frame} containing all unit-level results in vectorized format.
   \item \code{settings}: A list of routine metadata:
     \itemize{
       \item \code{meanlag}, \code{meanlead}: Integer averages of the selected unit lags/leads.

@@ -23,7 +23,8 @@ DisplayWesterlund(
   realmeanlead = -1,
   auto = 0,
   westerlund = FALSE,
-  mg = FALSE
+  mg = FALSE,
+  verbose = FALSE
 )
 }
 \arguments{
@@ -52,6 +53,8 @@ DisplayWesterlund(
   \item{westerlund}{Logical. If \code{TRUE}, uses the hard-coded Westerlund-specific moment constants for standardization (separate constants for trend vs no-trend). If \code{FALSE}, uses lookup tables indexed by deterministic case and number of covariates.}
 
   \item{mg}{Logical. Reserved for future use / compatibility; currently not used in the computation.}
+
+  \item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
 \details{
 \strong{What this function does.}

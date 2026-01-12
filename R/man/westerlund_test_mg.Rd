@@ -2,7 +2,7 @@
 \alias{westerlund_test_mg}
 \title{Print Mean-Group ECM Output and Long-Run Relationship Tables}
 \usage{
-westerlund_test_mg(b, V, b2, V2, auto)
+westerlund_test_mg(b, V, b2, V2, auto, verbose = FALSE)
 }
 \arguments{
 \item{b}{A numeric vector of coefficients for the long-run relationship and short-run adjustment terms (as reported in the second table).}
@@ -14,10 +14,13 @@ westerlund_test_mg(b, V, b2, V2, auto)
 \item{V2}{A numeric variance-covariance matrix corresponding to \code{b2}.}
 
 \item{auto}{Logical/integer. If non-zero, prints a note indicating that short-run coefficients (apart from the error-correction term) are omitted because selected lag/lead lengths may differ across units.}
+
+\item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
 \value{
-This function is called for its side effect (printing).
-It invisibly returns \code{NULL}.
+A named \code{list} containing two matrices:
+\item{mg_model}{A numeric matrix containing the Mean-group ECM results (coefficients, SE, z, p-values, and CI).}
+\item{long_run}{A numeric matrix containing the long-run relationship and adjustment results.}
 }
 \description{
 Internal reporting helper that prints two Stata-style coefficient tables:
@@ -70,7 +73,7 @@ V2 <- matrix(0.04^2, nrow = 1, ncol = 1)
 rownames(V2) <- colnames(V2) <- names(b2)
 
 ## Print both sections (auto = TRUE prints the omission note)
-westerlund_test_mg(b, V, b2, V2, auto = TRUE)
+westerlund_test_mg(b, V, b2, V2, auto = TRUE, verbose = FALSE)
 }
 }
 }

@@ -7,7 +7,7 @@
 The package replicates the logic of the Westerlund (2007) methodology, including:
 * **Four Test Statistics**: Computes $G_t$, $G_a$, $P_t$, and $P_a$.
 * **Flexible Dynamics**: Allows for unit-specific lag and lead lengths.
-* **Automated Selection**: Built-in AIC/BIC selection logic for optimal lag and lead lengths.
+* **Automated Selection**: Built-in AIC/BIC selection logic for optimal lag and lead lengths. (BIC to be implemented)
 * **Bootstrap Procedure**: Robust p-values to handle cross-sectional dependence.
 * **Kernel Estimation**: Bartlett kernel long-run variance estimation.
 * **Gap Handling**: Strict time-series continuity checks to ensure valid econometric results.

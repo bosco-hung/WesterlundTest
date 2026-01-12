@@ -21,8 +21,9 @@ westerlund_test(
   leads = NULL,
   westerlund = FALSE,
   bootstrap = -1,
-  noisily = FALSE,
-  lrwindow = 2
+  indiv.ecm = FALSE,
+  lrwindow = 2,
+  verbose = FALSE
 )
 }
 \arguments{
@@ -48,9 +49,11 @@ westerlund_test(
 
   \item{bootstrap}{Integer. If \code{bootstrap > 0}, runs an internal bootstrap routine with \code{bootstrap} replications and returns bootstrap p-values for the raw statistics. If \code{bootstrap <= 0} (default \code{-1}), no bootstrap is performed.}
 
-  \item{noisily}{Logical. If \code{TRUE}, prints progress output from internal routines.}
+  \item{indiv.ecm}{Logical. If \code{TRUE}, gets output of individual ECM regressions.}
 
   \item{lrwindow}{Integer. Window parameter used for long-run variance estimation in internal routines.}
+
+  \item{verbose}{Logical. If \code{TRUE}, prints additional information.}
 }
 \details{
 The test is based on estimating unit-specific error-correction models (ECMs) and
@@ -91,9 +94,11 @@ A list containing the following components:
     (only populated if \code{bootstrap > 0}).
   \item \code{bootstrap_distributions}: A matrix of the bootstrap replicates for each statistic.
   \item \code{unit_data}: A \code{data.frame} with unit-specific ECM results (alpha and beta estimates).
+  \code{indiv_data}: A list of length equal to the number of cross-sectional units storing unit-specific results.
   \item \code{mean_group}: A list containing the Mean Group estimates (\code{mg_alpha}, \code{mg_betas})
     and their respective standard errors.
   \item \code{settings}: A list of the lag/lead specifications and internal parameters used.
+  \item \code{mg_results}: A \code{data.frame} summarizing the Mean Group estimation results.
 }
 }
 \section{Vignette}{
@@ -125,7 +130,7 @@ res_plain <- westerlund_test(
   leads      = 0,
   westerlund = FALSE,
   bootstrap  = -1,
-  noisily    = FALSE,
+  indiv.ecm  = FALSE,
   lrwindow   = 2
 )
 }

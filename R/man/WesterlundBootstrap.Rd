@@ -23,9 +23,10 @@ WesterlundBootstrap(
   leads = NULL,
   westerlund = FALSE,
   bootstrap = 100,
-  noisily = FALSE,
+  indiv.ecm = FALSE,
   debug = FALSE,
-  lrwindow = 2
+  lrwindow = 2,
+  verbose = FALSE
 )
 }
 \arguments{
@@ -53,11 +54,13 @@ WesterlundBootstrap(
 
   \item{bootstrap}{Integer. Number of bootstrap replications.}
 
-  \item{noisily}{Logical. If \code{TRUE}, prints additional progress output.}
+  \item{indiv.ecm}{Logical. If \code{TRUE}, gets output of individual ECM regressions..}
 
   \item{debug}{Logical. If \code{TRUE}, prints debugging output and may relax some quiet behaviour.}
 
   \item{lrwindow}{Integer. Bartlett kernel window (maximum lag) forwarded to \code{\link{WesterlundPlain}} during bootstrap re-estimation.}
+
+  \item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
 \details{
 \strong{Purpose and status.}
@@ -140,8 +143,9 @@ boot_res <- WesterlundBootstrap(
   leads      = 0,
   westerlund = FALSE,
   bootstrap  = 399,
-  noisily    = TRUE,
-  lrwindow   = 2
+  indiv.ecm  = TRUE,
+  lrwindow   = 2,
+  verbose    = FALSE
 )
 
 ## Example left-tail p-value for Gt (assuming 'obs' exists)

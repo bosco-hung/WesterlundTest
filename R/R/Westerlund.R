@@ -35,9 +35,10 @@
 #'   routine with \code{bootstrap} replications and returns bootstrap p-values
 #'   for the raw statistics. If \code{bootstrap <= 0} (default \code{-1}), no
 #'   bootstrap is performed.
-#' @param noisily Logical. If \code{TRUE}, prints progress output from internal routines.
+#' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
 #' @param lrwindow Integer. Window parameter used for long-run variance estimation
 #'   in internal routines. Default is 2.
+#' @param verbose Logical. If \code{TRUE}, prints additional information.
 #'
 #' @details
 #' The test evaluates the null hypothesis of no error correction for all
@@ -80,13 +81,14 @@
 #'       \item \code{gt_z, ga_z, pt_z, pa_z}: Standardized Z-scores.
 #'       \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: Asymptotic left-tail p-values.
 #'     }
-#'   \item \code{boot_pvals}: A named list (\code{gt, ga, pt, pa}) of bootstrap p-values, 
+#'   \item \code{boot_pvals}: A named list (\code{gt, ga, pt, pa}) of bootstrap p-values,
 #'     calculated only if \code{bootstrap > 0}.
-#'   \item \code{bootstrap_distributions}: A matrix of dimension \code{[bootstrap x 4]} 
+#'   \item \code{bootstrap_distributions}: A matrix of dimension \code{[bootstrap x 4]}
 #'     containing the distribution of the four statistics across replications.
-#'   \item \code{unit_data}: A \code{data.frame} containing unit-specific results including 
-#'     individual alpha coefficients (\code{ai}), beta estimates (\code{betai}), and 
+#'   \item \code{unit_data}: A \code{data.frame} containing unit-specific results including
+#'     individual alpha coefficients (\code{ai}), beta estimates (\code{betai}), and
 #'     standard errors.
+#'   \item \code{indiv_data}: A list of length equal to the number of cross-sectional units storing unit-specific results.
 #'   \item \code{mean_group}: A list containing:
 #'     \itemize{
 #'       \item \code{mg_alpha}: The Mean Group estimate of the error correction coefficient.
@@ -95,6 +97,7 @@
 #'       \item \code{se_mg_betas}: Standard errors for the MG betas.
 #'     }
 #'   \item \code{settings}: A list of internal parameters and lag/lead selections used.
+#'   \item \code{mg_results}: A \code{data.frame} summarizing the Mean Group estimation results.
 #' }
 #'
 #' @references
@@ -105,20 +108,33 @@
 #' \code{\link{WesterlundPlain}}, \code{\link{WesterlundBootstrap}}, \code{\link{DisplayWesterlund}}
 #'
 #' @examples
-#' \dontrun{
-#' # Asymptotic test with 1 lag and 0 leads
-#' res_plain <- westerlund_test(
-#'   data = df, yvar = "y", xvars = c("x1", "x2"),
-#'   idvar = "id", timevar = "t", constant = TRUE,
-#'   lags = 1, leads = 0
+#' \donttest{
+#' # 1. Generate a small synthetic panel dataset
+#' set.seed(123)
+#' N <- 10; T <- 30
+#' df <- data.frame(
+#'   id = rep(1:N, each = T),
+#'   time = rep(1:T, N),
+#'   y = rnorm(N * T),
+#'   x1 = rnorm(N * T)
 #' )
 #'
-#' # Bootstrap test with lag/lead selection range
+#' # 2. Run Asymptotic (Plain) Test
+#' res_plain <- westerlund_test(
+#'   data = df, yvar = "y", xvars = "x1",
+#'   idvar = "id", timevar = "time",
+#'   constant = TRUE, lags = 1, leads = 0,
+#'   verbose = FALSE
+#' )
+#' print(res_plain$test_stats)
+#'
+#' # 3. Run Bootstrap Test with automatic lag selection
+#' # Note: bootstrap replications are kept low for example speed
 #' res_boot <- westerlund_test(
-#'   data = df, yvar = "y", xvars = c("x1", "x2"),
-#'   idvar = "id", timevar = "t", constant = TRUE,
-#'   lags = c(1, 2), leads = c(0, 1),
-#'   bootstrap = 399, noisily = TRUE
+#'   data = df, yvar = "y", xvars = "x1",
+#'   idvar = "id", timevar = "time",
+#'   constant = TRUE, lags = c(0, 1),
+#'   bootstrap = 50, verbose = TRUE
 #' )
 #' }
 #'
@@ -134,8 +150,9 @@ westerlund_test <- function(data,
                    leads = NULL,      # Can be a single integer or a vector c(min, max)
                    westerlund = FALSE,
                    bootstrap = -1,    # Default -1
-                   noisily = FALSE,
-                   lrwindow = 2) {
+                   indiv.ecm = FALSE,
+                   lrwindow = 2,
+                   verbose = FALSE) {
 
   # ----------------------------------------------------------------------------
   # 1. Input Parsing and Validation
@@ -206,12 +223,12 @@ westerlund_test <- function(data,
   boot_pvals <- list()
 
   if (bootstrap > 0) {
-    cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
-    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, bootstrap, noisily, FALSE, lrwindow)
+    if(verbose)cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
+    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, bootstrap, indiv.ecm = FALSE, lrwindow = lrwindow, verbose = verbose)
     boot_dist <- boot_res$BOOTSTATS
   }
 
-  plain_res <- WesterlundPlain(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, lrwindow, westerlund, bootno = TRUE, noisily = noisily)
+  plain_res <- WesterlundPlain(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, lrwindow, westerlund, bootno = TRUE, indiv.ecm = indiv.ecm, verbose = verbose)
 
   # ----------------------------------------------------------------------------
   # 7. Mean Group (MG) Estimation and Display
@@ -244,7 +261,7 @@ westerlund_test <- function(data,
   dimnames(V_lr) <- list(xvars, xvars)
 
   # Display the MG Results (Stata: eret disp)
-  westerlund_test_mg(b = mg_betas, V = V_lr, b2 = b_ec, V2 = V_ec, auto = auto)
+  mg_results = westerlund_test_mg(b = mg_betas, V = V_lr, b2 = b_ec, V2 = V_ec, auto = auto, verbose = verbose)
 
   # ----------------------------------------------------------------------------
   # 8. Test Statistics Display
@@ -270,7 +287,8 @@ westerlund_test <- function(data,
     meanlead = plain_res$settings$meanlead,
     realmeanlag = plain_res$settings$realmeanlag,
     realmeanlead = plain_res$settings$realmeanlead,
-    auto = plain_res$settings$auto
+    auto = plain_res$settings$auto,
+    verbose = verbose
   )
 
   # ----------------------------------------------------------------------------
@@ -280,14 +298,16 @@ westerlund_test <- function(data,
     test_stats = plain_res$stats,
     boot_pvals = boot_pvals,
     bootstrap_distributions = boot_dist,
-    unit_data = do.call(rbind, lapply(plain_res$indiv_data, function(x) as.data.frame(x))),
+    unit_data = plain_res$results_df,
+    indiv_data = plain_res$indiv_data,
     mean_group = list(
       mg_alpha = mg_alpha,
       se_mg_alpha = se_mg_alpha,
       mg_betas = mg_betas,
       se_mg_betas = se_mg_betas
     ),
-    settings = plain_res$settings
+    settings = plain_res$settings,
+    mg_results = mg_results
   )
 
   return(results_bundle)
@@ -619,11 +639,10 @@ get_diff <- function(vec, tvec) {
 #'   information criterion and trimming logic for variance estimation.
 #' @param bootno Logical. If \code{TRUE}, suppresses certain header outputs,
 #'   typically used when called from a bootstrap routine.
-#' @param noisily Logical. If \code{TRUE}, prints more detailed progress to the console.
+#' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions..
 #' @param debug Logical. If \code{TRUE}, provides additional debugging information
 #'   and suppresses progress indicators.
-#' @param mg Logical. Reserved for future use (mean-group compatibility).
-#' @param detrend Logical. Reserved for future use (detrending compatibility).
+#' @param verbose Logical. If \code{TRUE}, prints progress messages to the console.
 #'
 #' @details
 #' \code{WesterlundPlain} is the computational core for the Westerlund test. It
@@ -664,11 +683,14 @@ get_diff <- function(vec, tvec) {
 #'   \item \code{indiv_data}: A named list where each element corresponds to a cross-sectional unit (ID), containing:
 #'     \itemize{
 #'       \item \code{ai}: The estimated speed of adjustment (alpha).
-#'       \item \code{seai}: The standard error of alpha.
-#'       \item \code{betai}: Vector of long-run coefficients.
+#'       \item \code{seai}: The standard error of alpha (adjusted for degrees of freedom).
+#'       \item \code{betai}: Vector of long-run coefficients (\eqn{\beta = -\lambda / \alpha}).
 #'       \item \code{blag, blead}: The lags and leads selected for that specific unit.
-#'       \item \code{ti}: Number of observations for the unit.
+#'       \item \code{ti}: Raw observation count for the unit.
+#'       \item \code{tnorm}: Degrees of freedom used for normalization.
+#'       \item \code{reg_coef}: If \code{indiv.ecm = TRUE}, the full coefficient matrix from \code{westerlund_test_reg}.
 #'     }
+#'   \item \code{results_df}: A summary \code{data.frame} containing all unit-level results in vectorized format.
 #'   \item \code{settings}: A list of parameters used in the routine:
 #'     \itemize{
 #'       \item \code{meanlag, meanlead}: Integer averages of the selected lags/leads.
@@ -688,9 +710,9 @@ get_diff <- function(vec, tvec) {
 WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
                             constant = FALSE, trend = FALSE, lags, leads = NULL,
                             lrwindow = 2, westerlund = FALSE, bootno = FALSE,
-                            noisily = FALSE, debug = FALSE, mg = FALSE, detrend = FALSE) {
+                            indiv.ecm = FALSE, debug = FALSE, verbose = FALSE) {
 
-  if (bootno) cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
+  if (bootno & verbose) cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
 
   # 1. Data Cleaning and Preparation
   # Sort strictly to ensure loop order matches Stata
@@ -918,10 +940,11 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
       # 1. Run Individual Unit Regression
       mod <- lm(dep_var_dy ~ 0 + ., data=reg_df)
 
-      if (noisily) {
-          cat(sprintf("\nIndividual ECM Regression for Unit: %s\n", uid))
+      reg_coef <- NULL
+      if (indiv.ecm) {
+          if(verbose)cat(sprintf("\nIndividual ECM Regression for Unit: %s\n", uid))
           # Pass the estimated coefficients and the VCE matrix
-          westerlund_test_reg(b = coef(mod), V = vcov(mod))
+          reg_coef <- westerlund_test_reg(b = coef(mod), V = vcov(mod), verbose = verbose)
       }
 
       sc <- summary(mod)$coefficients
@@ -958,17 +981,11 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
           blag = currlag,
           blead = currlead,
           ti = thisti,
-          tnorm = 0 # Calculated below
+          tnorm = 0, # Calculated below
+          reg_coef = reg_coef
         )
 
-        # 4. Optional Noisily/Regdisplay Logic
-        if (noisily) {
-          cat(sprintf("\nIndividual ECM Regression: ID %s (Lags=%d, Leads=%d)\n", uid, currlag, currlead))
-          # Replicate xtwestregdisplay logic
-          westerlund_test_reg(cfs, vcov(mod))
-        }
-
-        # 5. Extract results for Gt/Ga calculation (results_df)
+        # 4. Extract results for Gt/Ga calculation (results_df)
         results_df$ai[i] <- alpha_i
         results_df$seai[i] <- se_alpha_i
 
@@ -1002,7 +1019,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
           }
         }
 
-        # 6. Long-Run Variances (wysq, wusq)
+        # 5. Long-Run Variances (wysq, wusq)
         wusq <- calc_lrvar_bartlett(tmpu, maxlag = lrwindow, nodemean = TRUE)
 
         # Recalculate wysq with same trimming for consistency
@@ -1026,9 +1043,9 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
       }
     }
 
-    if (bootno && !noisily && counter > (dots * length(ids)/10)) {if (!debug) cat("."); dots<-dots+1}
+    if (bootno && !indiv.ecm && counter > (dots * length(ids)/10) && verbose) {if (!debug) cat("."); dots<-dots+1}
   }
-  if (bootno) cat("\n")
+  if (bootno & verbose) cat("\n")
 
   # ============================================================================
   # LOOP 2: Pooled Regressions (P Stats)
@@ -1198,6 +1215,16 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
     }
   }
 
+  # Synchronize indiv_data with final adjusted results_df
+  for (i in seq_along(ids)) {
+    uid_str <- as.character(ids[i])
+    if (!is.null(indiv_data[[uid_str]])) {
+      indiv_data[[uid_str]]$seai <- results_df$seai[i]
+      indiv_data[[uid_str]]$tnorm <- results_df$tnorm[i]
+      indiv_data[[uid_str]]$aonesemi <- results_df$aonesemi[i]
+    }
+  }
+
   Gt <- mean(results_df$ai / results_df$seai, na.rm=TRUE)
   Ga <- mean(results_df$tnorm * results_df$ai / results_df$aonesemi, na.rm=TRUE)
   Pt <- pooledalpha / se_pooledalpha
@@ -1209,6 +1236,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
   return(list(
     stats = list(Gt=Gt, Ga=Ga, Pt=Pt, Pa=Pa),
     indiv_data = indiv_data,
+    results_df = results_df,
     settings = list(meanlag=meanlag, meanlead=meanlead, realmeanlag=realmeanlag, realmeanlead=realmeanlead,auto=auto)
   ))
 }
@@ -1241,10 +1269,11 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #' @param westerlund Logical. If \code{TRUE}, uses Westerlund-style information
 #'   criterion and trimming logic in the bootstrap setup.
 #' @param bootstrap Integer. Number of bootstrap replications.
-#' @param noisily Logical. If \code{TRUE}, prints additional progress output.
+#' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
 #' @param debug Logical. If \code{TRUE}, prints debugging output.
 #' @param lrwindow Integer. Bartlett kernel window forwarded to
 #'   \code{\link{WesterlundPlain}} during re-estimation.
+#' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
 #' \code{WesterlundBootstrap} is an internal engine used by \code{\link{westerlund_test}}
@@ -1288,9 +1317,10 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
                                 constant = FALSE, trend = FALSE, lags, leads = NULL,
                                 westerlund = FALSE, bootstrap = 100,
-                                noisily = FALSE, debug = FALSE, lrwindow = 2) {
+                                indiv.ecm = FALSE, debug = FALSE, lrwindow = 2,
+                                verbose = FALSE) {
 
-  if (noisily || debug) cat("\nBootstrapping critical values under H0\n")
+  if (verbose) cat("\nBootstrapping critical values under H0\n")
 
   # --- Helper: Lag/Lead Vector ---
   L_vec <- function(x, k) {
@@ -1503,13 +1533,11 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
   BOOTSTATS <- matrix(NA, nrow=bootstrap, ncol=4)
 
   # 4. Bootstrap Loop
-  # ===== fix RNG to MT19937 like Python =====
   RNGkind(kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
 
-  # --- Balanced panel lengths implied by your setup ---
   # Ti0: original panel length per id (balanced => constant)
   Ti0 <- as.integer(max(ti_counts))     # ti_counts from earlier
-  # Stata/Python: U = ti - maxlag - maxlead - 1  (newttt upper bound)
+  # Stata: U = ti - maxlag - maxlead - 1  (newttt upper bound)
   # --- Balanced support length (Stata: rows where e<. per id) ---
   Tr_vec <- sapply(valid_ids, function(uid) {
     id_rows <- (work_data[[idvar]] == uid) & touse
@@ -1520,7 +1548,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
   if (U <= 1) stop("U too small. Check residual support length.")
 
 
-  # Python/Stata: Text = ti + maxlag + maxlead + 2 (keep first Text after sorting by newtt)
+  # Stata: Text = ti + maxlag + maxlead + 2 (keep first Text after sorting by newtt)
   Text <- Ti0 + maxlag + maxlead + 2
   base_len <- 2 * U                     # expandcl 2
 
@@ -1553,7 +1581,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       id_d <- work_data[work_data[[idvar]] == uid & touse, ]
       id_d <- id_d[order(id_d[[timevar]]), ]
 
-      # support-only mask matches e non-missing rows (like Python mask = ~is.na(resid))
+      # support-only mask matches e non-missing rows
       mask <- !is.na(id_d$e)
       e_sup <- id_d$e[mask]
       # center within id already done globally; but safe to demean again (Stata egen mean(e))
@@ -1583,7 +1611,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       u[is.na(u)] <- 0
 
       # Step A: Construct u (Add X terms) using coeff_store (same as your current code)
-      # We apply L(0..maxlag) and F(1..maxlead) on centered dX, with 0-fill like Python shift().fillna(0)
+      # We apply L(0..maxlag) and F(1..maxlead) on centered dX, with 0-fill
 
       cfs_id <- coeff_store[[as.character(uid)]]
       if (is.null(cfs_id)) next
@@ -1677,7 +1705,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       constant = constant, trend = trend,
       lags = lags, leads = leads,
       lrwindow = lrwindow, westerlund = westerlund,
-      bootno = FALSE
+      bootno = FALSE, verbose = verbose
     )
 
     BOOTSTATS[b, ] <- c(res$stats$Gt, res$stats$Ga, res$stats$Pt, res$stats$Pa)
@@ -1811,6 +1839,7 @@ shiftNA <- function(v, k) {
 #' @param westerlund Logical. If \code{TRUE}, uses hard-coded Westerlund-specific
 #'   moment constants for standardization.
 #' @param mg Logical. Reserved for future use (mean-group compatibility).
+#' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
 #' \code{DisplayWesterlund} converts raw statistics into a standardized normal
@@ -1870,7 +1899,8 @@ DisplayWesterlund <- function(stats,
                               realmeanlead = -1,
                               auto = 0,
                               westerlund = FALSE,
-                              mg = FALSE) {
+                              mg = FALSE,
+                              verbose = FALSE) {
 
   # Extract statistics
   gt <- stats$Gt
@@ -1881,23 +1911,26 @@ DisplayWesterlund <- function(stats,
   # ----------------------------------------------------------------------------
   # 1. Header Display
   # ----------------------------------------------------------------------------
-  cat("\n\n")
-  cat("Results for H0: no cointegration\n")
+  if (verbose) {
+    cat("\n\n")
+    cat("Results for H0: no cointegration\n")
 
-  if (nox > 1) {
-    cat(sprintf("With %d series and %d covariates\n", nobs, nox))
-  } else {
-    cat(sprintf("With %d series and 1 covariate\n", nobs))
+    if (nox > 1) {
+      cat(sprintf("With %d series and %d covariates\n", nobs, nox))
+    } else {
+      cat(sprintf("With %d series and 1 covariate\n", nobs))
+    }
   }
+
 
   if (auto) {
     roundedrealmeanlag <- round(realmeanlag, 2)
-    cat(sprintf("Average AIC selected lag length: %s\n", format(roundedrealmeanlag, nsmall=2)))
+    if (verbose) cat(sprintf("Average AIC selected lag length: %s\n", format(roundedrealmeanlag, nsmall=2)))
 
     roundedrealmeanlead <- round(realmeanlead, 2)
-    cat(sprintf("Average AIC selected lead length: %s\n", format(roundedrealmeanlead, nsmall=2)))
+    if (verbose) cat(sprintf("Average AIC selected lead length: %s\n", format(roundedrealmeanlead, nsmall=2)))
   }
-  cat("\n")
+  if (verbose) cat("\n")
 
   # ----------------------------------------------------------------------------
   # 2. Calculating Z-stats (Normalization)
@@ -2014,24 +2047,26 @@ DisplayWesterlund <- function(stats,
 
   # Check if Bootstrapping was done
   if (is.null(bootstats)) {
-    # Standard Table
+    if (verbose){
+      # Standard Table
 
-    cat("----------------------------------------------------\n")
-    cat(" Statistic |   Value   |  Z-value  |  P-value  |\n")
-    cat("----------------------------------------------------\n")
+      cat("----------------------------------------------------\n")
+      cat(" Statistic |   Value   |  Z-value  |  P-value  |\n")
+      cat("----------------------------------------------------\n")
 
-    # Helper to print row
-    print_row <- function(name, val, z, p) {
-      cat(sprintf("     %s    | %8.3f  | %8.3f  | %8.3f  |\n",
-                  name, val, z, round(p, 4)))
+      # Helper to print row
+      print_row <- function(name, val, z, p) {
+        cat(sprintf("     %s    | %8.3f  | %8.3f  | %8.3f  |\n",
+                    name, val, z, round(p, 4)))
+      }
+
+      print_row("Gt", gt, gtnorm, pnorm(gtnorm))
+      print_row("Ga", ga, ganorm, pnorm(ganorm))
+      print_row("Pt", pt, ptnorm, pnorm(ptnorm))
+      print_row("Pa", pa, panorm, pnorm(panorm))
+
+      cat("----------------------------------------------------\n")
     }
-
-    print_row("Gt", gt, gtnorm, pnorm(gtnorm))
-    print_row("Ga", ga, ganorm, pnorm(ganorm))
-    print_row("Pt", pt, ptnorm, pnorm(ptnorm))
-    print_row("Pa", pa, panorm, pnorm(panorm))
-
-    cat("----------------------------------------------------\n")
 
   } else {
     # Bootstrapped Table
@@ -2063,28 +2098,29 @@ DisplayWesterlund <- function(stats,
       (r + 1) / (B + 1)
     }
 
-
     pvaluegtboot <- calc_boot_pval(GTSTATS, gt)
     pvaluegaboot <- calc_boot_pval(GASTATS, ga)
     pvalueptboot <- calc_boot_pval(PTSTATS, pt)
     pvaluepaboot <- calc_boot_pval(PASTATS, pa)
 
     # Display Table with Robust P-value
-    cat("--------------------------------------------------------------------------\n")
-    cat(" Statistic |   Value   |  Z-value  |  P-value  | Robust P-value |\n")
-    cat("--------------------------------------------------------------------------\n")
+    if (verbose) {
+      cat("--------------------------------------------------------------------------\n")
+      cat(" Statistic |   Value   |  Z-value  |  P-value  | Robust P-value |\n")
+      cat("--------------------------------------------------------------------------\n")
 
-    print_boot_row <- function(name, val, z, p, bp) {
-      cat(sprintf("     %s    | %8.3f  | %8.3f  | %8.3f  |      %8.3f    |\n",
-                  name, val, z, round(p, 4), round(bp, 4)))
+      print_boot_row <- function(name, val, z, p, bp) {
+        cat(sprintf("     %s    | %8.3f  | %8.3f  | %8.3f  |      %8.3f    |\n",
+                    name, val, z, round(p, 4), round(bp, 4)))
+      }
+
+      print_boot_row("Gt", gt, gtnorm, pnorm(gtnorm), pvaluegtboot)
+      print_boot_row("Ga", ga, ganorm, pnorm(ganorm), pvaluegaboot)
+      print_boot_row("Pt", pt, ptnorm, pnorm(ptnorm), pvalueptboot)
+      print_boot_row("Pa", pa, panorm, pnorm(panorm), pvaluepaboot)
+
+      cat("--------------------------------------------------------------------------\n")
     }
-
-    print_boot_row("Gt", gt, gtnorm, pnorm(gtnorm), pvaluegtboot)
-    print_boot_row("Ga", ga, ganorm, pnorm(ganorm), pvaluegaboot)
-    print_boot_row("Pt", pt, ptnorm, pnorm(ptnorm), pvalueptboot)
-    print_boot_row("Pa", pa, panorm, pnorm(panorm), pvaluepaboot)
-
-    cat("--------------------------------------------------------------------------\n")
 
     # Add boot p-values to return list
     ret_list$gt_pvalboot <- pvaluegtboot
@@ -2108,6 +2144,7 @@ DisplayWesterlund <- function(stats,
 #'
 #' @param b A named numeric vector of coefficients.
 #' @param V A numeric variance-covariance matrix corresponding to \code{b}.
+#' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
 #' \strong{Calculation Logic.}
@@ -2131,8 +2168,9 @@ DisplayWesterlund <- function(stats,
 #' provides a standardized way to report results across different parts of the
 #' Westerlund cointegration test output.
 #'
-#' @return This function is called for its side effect (printing).
-#' It invisibly returns \code{NULL}.
+#' @return A numeric matrix with rows corresponding to the coefficients in \code{b}
+#' and columns for "Coef.", "Std. Err.", "z", "P>|z|", and the 95\% confidence
+#' interval bounds.
 #'
 #' @section Reporting Style:
 #' This section describes the alignment with econometric software reporting standards.
@@ -2151,14 +2189,11 @@ DisplayWesterlund <- function(stats,
 #' names(b) <- rownames(V) <- colnames(V) <- c("alpha", "beta")
 #'
 #' ## Print the formatted table
-#' westerlund_test_reg(b, V)
+#' westerlund_test_reg(b, V, verbose = TRUE)
 #'
 #' @seealso \code{\link{westerlund_test_mg}}, \code{\link{westerlund_test}}
 #' @export
-westerlund_test_reg <- function(b, V) {
-
-  # Stata: di ""
-  cat("\n")
+westerlund_test_reg <- function(b, V, verbose = FALSE) {
 
   # Check for validity
   if (length(b) != nrow(V) || length(b) != ncol(V)) {
@@ -2205,17 +2240,22 @@ westerlund_test_reg <- function(b, V) {
   rownames(res_table) <- names(b)
 
   # Display using printCoefmat for clean formatting
-  printCoefmat(res_table,
-               digits = 4,
-               signif.stars = FALSE,
-               na.print = "NA",
-               cs.ind = 1:2,      # Coef and SE columns
-               tst.ind = 3,       # Z-stat column
-               zap.ind = 4,       # P-val column
-               P.values = TRUE,
-               has.Pvalue = TRUE)
+  if(verbose) {
+    cat("\n")
+    printCoefmat(res_table,
+                 digits = 4,
+                 signif.stars = FALSE,
+                 na.print = "NA",
+                 cs.ind = 1:2,      # Coef and SE columns
+                 tst.ind = 3,       # Z-stat column
+                 zap.ind = 4,       # P-val column
+                 P.values = TRUE,
+                 has.Pvalue = TRUE)
 
-  cat("\n")
+    cat("\n")
+  }
+
+  return(res_table)
 }
 
 # ==============================================================================
@@ -2238,6 +2278,7 @@ westerlund_test_reg <- function(b, V) {
 #' @param auto Logical/integer. If non-zero, prints a note indicating that
 #'   short-run coefficients (apart from the error-correction term) are omitted
 #'   because selected lag/lead lengths may differ across units.
+#' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
 #' This function is designed to replicate the reporting structure of mean-group
@@ -2259,8 +2300,11 @@ westerlund_test_reg <- function(b, V) {
 #'
 #'
 #'
-#' @return This function is called for its side effect (printing to the console).
-#'   It invisibly returns \code{NULL}.
+#' @return A list containing two elements:
+#' \itemize{
+#'   \item \code{mg_model}: A numeric matrix containing the Mean-group ECM results.
+#'   \item \code{long_run}: A numeric matrix containing the Long-run relationship and adjustment results.
+#' }
 #'
 #' @section Intended Use:
 #' This is an internal display helper used in reporting flows. It is not
@@ -2279,42 +2323,46 @@ westerlund_test_reg <- function(b, V) {
 #' rownames(V2) <- colnames(V2) <- names(b2)
 #'
 #' ## Print both sections (auto = TRUE prints the omission note)
-#' westerlund_test_mg(b, V, b2, V2, auto = TRUE)
+#' westerlund_test_mg(b, V, b2, V2, auto = TRUE, verbose = FALSE)
 #'
 #' @seealso \code{\link{westerlund_test_reg}}, \code{\link{westerlund_test}}
 #'
 #' @export
-westerlund_test_mg <- function(b, V, b2, V2, auto) {
+westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 
   # ----------------------------------------------------------------------------
   # 1. Display Second Set (Short Run / Mean Group ECM)
   # Corresponds to: eret post `b2' `V2' -> eret disp
   # ----------------------------------------------------------------------------
 
-  # Stata: di "" / di ""
-  cat("\n\n")
-  cat("Mean-group error-correction model\n")
+  if (verbose) {
+    cat("\n\n")
+    cat("Mean-group error-correction model\n")
 
-  if (auto) {
-    cat("Short run coefficients apart from the error-correction term are omitted as lag and lengths might differ between cross-sectional units\n")
-    cat("\n")
+    if (auto) {
+      cat("Short run coefficients apart from the error-correction term are omitted as lag and lengths might differ between cross-sectional units\n")
+      cat("\n")
+    }
   }
 
   # Call the previously defined display function
   # Ensure b2 is vector and V2 is matrix with matching names
-  westerlund_test_reg(b2, V2)
+  mg_model <- westerlund_test_reg(b2, V2, verbose)
 
   # ----------------------------------------------------------------------------
   # 2. Display First Set (Long Run Relationship)
   # Corresponds to: eret post `b' `V' -> eret disp
   # ----------------------------------------------------------------------------
 
-  cat("\n")
-  cat("Estimated long-run relationship and short run adjustment\n")
+  if (verbose) {
+    cat("\n")
+    cat("Estimated long-run relationship and short run adjustment\n")
+  }
 
   # Call the display function
-  westerlund_test_reg(b, V)
+  lr = westerlund_test_reg(b, V, verbose)
 
+  return(list(mg_model = mg_model, long_run = lr))
 }
 
 # ==============================================================================
@@ -2376,9 +2424,16 @@ westerlund_test_mg <- function(b, V, b2, V2, auto) {
 #'   \code{\link{DisplayWesterlund}}
 #'
 #' @examples
-#' \dontrun{
-#' # Assuming 'res' is the output from westerlund_test with bootstrap = 400
-#' p <- plot_westerlund_bootstrap(res, conf_level = 0.05)
+#' \donttest{
+#' set.seed(123)
+#' mock_boot <- matrix(rnorm(400, mean = -5), ncol = 4)
+#' colnames(mock_boot) <- c("Gt", "Ga", "Pt", "Pa")
+
+#' mock_results <- list(
+#'   test_stats = list(Gt = -5.2, Ga = -11.0, Pt = -6.0, Pa = -13.0),
+#'   bootstrap_distributions = mock_boot
+#' )
+#' p <- plot_westerlund_bootstrap(mock_results, conf_level = 0.05)
 #'
 #' # Display the plot
 #' print(p)
