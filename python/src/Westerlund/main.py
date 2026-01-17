@@ -12,18 +12,23 @@ import os
 
 class WesterlundTest:
     """
-    Implements a functional approximation of the Westerlund (2007) ECM-based panel 
-    cointegration tests.
+    Implements the Westerlund (2007) ECM-based panel cointegration tests.
     
-    This class provides a framework for testing the null hypothesis of no cointegration
-    in panel data by evaluating the presence of error correction. It computes four main 
-    statistics: two mean-group tests (Gt, Ga) and two pooled/panel tests (Pt, Pa). 
+    This class provides a comprehensive framework for testing the null hypothesis of 
+    no cointegration in panel data by evaluating the presence of error correction. 
+    It computes four main statistics: two mean-group tests (Gt, Ga) and two 
+    pooled/panel tests (Pt, Pa). 
+    
+    The implementation is designed to replicate the logic and strict time-series 
+    handling of the Stata 'xtwest' command, including support for unbalanced panels, 
+    automatic lag/lead selection, and residual-based bootstrapping.
     """
 
     def __init__(self, data, y_var, x_vars, id_var, time_var, 
-                 lags=1, leads=0, lrwindow=2, 
-                 constant=False, trend=False, westerlund=False, 
-                 bootstrap=-1, seed=None, nosily=False):
+                 lags=1, leads=0, lrwindow=2, constant=False, 
+                 trend=False, westerlund=False, aic=True,
+                 bootstrap=-1, indiv_ecm=False, seed=None, 
+                 verbose=False):
         """
         Initializes the WesterlundTest class with data and model specifications.
 
@@ -54,6 +59,9 @@ class WesterlundTest:
         trend : bool, optional
             Whether to include a linear time trend. If True, 'constant' is 
             automatically treated as True. Defaults to False.
+        aic : bool, optional
+            Whether to use Akaike Information Criterion for lag/lead selection. If
+            False, uses Bayesian Information Criterion. Defaults to True.
         westerlund : bool, optional
             If True, enforces specific constraints from the 2007 paper, including 
             specialized information criteria and trimming logic for variance. 
@@ -61,19 +69,20 @@ class WesterlundTest:
         bootstrap : int, optional
             Number of bootstrap replications. If > 0, robust p-values are 
             calculated. Defaults to -1 (no bootstrap).
+        indiv_ecm : bool, optional
+            Whether to store unit-specific ECM regression results.
         seed : int, optional
             Random seed for the bootstrap procedure to ensure reproducibility. 
             Defaults to None.
-        nosily : bool, optional
-            If True, prints unit-specific regression results to the console 
-            during the estimation process. Defaults to False.
+        verbose : bool, optional
+            If True, prints detailed messages to the console. Defaults to False.
 
         Notes
         -----
         **Lag and Lead Logic:**
         The model uses these parameters to capture short-run dynamics. If the 
         `auto` flag is triggered (via range input), the class utilizes an 
-        Information Criterion (AIC or Westerlund-specific) to find the optimal 
+        Information Criterion (AIC, BIC, or Westerlund-specific) to find the optimal 
         balance between model fit and parsimony for each cross-sectional unit.
 
         
@@ -107,13 +116,17 @@ class WesterlundTest:
         self.constant = constant
         self.trend = trend
         self.westerlund = westerlund
+        self.aic = aic
         self.bootstrap = bootstrap
+        self.indiv_ecm = indiv_ecm
         self.seed = seed
-        self.nosily = nosily
+        self.verbose = verbose
         self.nox = len(self.x_vars)
         self.auto = (self.minlag != self.maxlag) or (self.minlead != self.maxlead)
 
         self.results_bundle = None
+        self.indiv_reg = []
+        self.mg_results = None
 
     def _get_ts_map(self, series, time_vec):
         """
@@ -136,14 +149,13 @@ class WesterlundTest:
         -------
         dict
             A dictionary mapping time indices to values.
-        
+
         Notes
         -----
         By indexing via a map, the code ensures that if a lag is requested for 
         time T, it retrieves the value associated with time T-1. If T-1 is missing 
         from the keys, a gap is correctly identified and an NA can be returned 
         rather than incorrectly shifting the vector.
-
         """
         return dict(zip(time_vec, series))
 
@@ -151,6 +163,11 @@ class WesterlundTest:
         """
         Retrieves lagged or led values from a time-indexed mapping while explicitly
         respecting gaps in the time series.
+
+        This method replicates the behavior of Stata's `L.` (lag) and `F.` (lead) 
+        operators. Instead of shifting the vector by position, it calculates the 
+        target time (T - k) for every observation and looks it up in the provided 
+        time-series map.
 
         Parameters
         ----------
@@ -186,7 +203,8 @@ class WesterlundTest:
         series.
 
         This method estimates the spectral density at frequency zero using a 
-        weighted sum of autocovariances. 
+        weighted sum of autocovariances. It replicates the specific scaling 
+        and centering behavior used in the Westerlund (2007) test implementation.
 
         Parameters
         ----------
@@ -224,7 +242,6 @@ class WesterlundTest:
         x = series[~np.isnan(series)]
         n = len(x)
         if n <= 0: return 0.0
-
         gamma_0 = np.sum(x**2) / n
         if maxlag == 0: return gamma_0
         sum_weighted = 0
@@ -240,9 +257,11 @@ class WesterlundTest:
         Performs unit-specific optimal lag and lead selection for the Error Correction Model 
         using an information criterion search.
 
-        This method iterates through candidate lag (p) and lead (q) combinations. It constructs 
-        a temporary regression matrix for each pair and evaluates it using either the standard 
-        Akaike Information Criterion (AIC) or the specialized Westerlund (2007) criterion.
+        This method replicates the Stata selection logic by iterating through candidate 
+        lag (p) and lead (q) combinations. It constructs a temporary regression matrix 
+        for each pair and evaluates it using either the standard Akaike Information 
+        Criterion (AIC), Bayesian Information Criterion (BIC), or the specialized Westerlund
+        (2007) criterion.
 
         Parameters
         ----------
@@ -266,7 +285,7 @@ class WesterlundTest:
         Notes
         -----
         **Information Criteria:**
-        - **Standard Mode:** Uses `mod.aic`.
+        - **Standard Mode:** Uses `mod.aic` or `mod.bic`.
         - **Westerlund Mode:** Implements the specific penalization structure:
           $$IC = \ln\left(\frac{RSS}{T-p-q-1}\right) + \frac{2(p+q+d+1)}{T - p_{max} - q_{max}}$$
           where $d$ represents the count of deterministic terms.
@@ -327,7 +346,7 @@ class WesterlundTest:
                         penalty = 2 * (l + ld + d_count + 1) / (thisti - self.maxlag - self.maxlead)
                         ic = term1 + penalty
                     else:
-                        ic = mod.aic
+                        ic = mod.aic if self.aic else mod.bic
                     
                     if ic < best_ic:
                         best_ic, best_l, best_ld = ic, l, ld
@@ -339,8 +358,10 @@ class WesterlundTest:
         Coordinates the unit-specific model selection and final Error Correction Model (ECM) 
         estimation.
 
-        This method first identifies the optimal short-run dynamics (lags and leads) and then 
-        estimates the full model to extract the error correction coefficients.
+        This method follows the two-phase logic established by Westerlund (2007) and 
+        implemented in Stata's 'xtwest'. It first identifies the optimal short-run 
+        dynamics (lags and leads) and then estimates the full model to extract the 
+        error correction coefficients.
 
         Parameters
         ----------
@@ -467,6 +488,11 @@ class WesterlundTest:
         Internal plain (non-bootstrap) routine for computing the four Westerlund (2007)
         ECM-based panel cointegration test statistics: Gt, Ga, Pt, and Pa.
 
+        This method implements a two-pass estimation procedure that closely replicates 
+        the logic of the Stata 'xtwest' command. It handles unbalanced panels, 
+        automatic lag/lead selection, and time-continuity checks implicitly through 
+        time-indexed mapping helpers.
+
         Parameters
         ----------
         df : pandas.DataFrame
@@ -564,15 +590,18 @@ class WesterlundTest:
             
             # Regression
             model = sm.OLS(dy[valid], RHS[valid]).fit(method="qr")
+            # Call the display function for this specific group (Unit i)
+            # We use the column names from _build_rhs_ordered to label the coefficients
             
-            if is_boot == False and self.nosily:
-                self._reg_display(
+            if is_boot == False and self.indiv_ecm:
+                indiv_reg = self._reg_display(
                     params=model.params,
                     bse=model.bse,
                     tvalues=model.tvalues,
                     pvalues=model.pvalues,
                     title=f"Individual Regression Results for ID: {gid} (Lags={blag}, Leads={blead})"
                 )
+                self.indiv_reg.append({gid: indiv_reg})
             
             # Locate alpha_i (coefficient of L.y)
             alpha_idx = int(self.constant) + int(self.trend)
@@ -585,13 +614,13 @@ class WesterlundTest:
             for j in range(self.nox):
                 gamma_idx = alpha_idx + 1 + j
                 gamma_ij = model.params[gamma_idx]
-                # beta = -gamma / alpha
+                # Stata xtwest logic: beta = -gamma / alpha
                 beta_is.append(-gamma_ij / alpha_i if alpha_i != 0 else 0.0)
 
             # --- Long Run Variance (wysq) ---
             dytmp = dy.copy()
             if self.westerlund:
-                # trim start by lags, end by leads
+                # Replicate R/Stata trimming: trim start by lags, end by leads
                 if blag > 0: 
                     dytmp[:blag + 1] = np.nan
                 if blead > 0: 
@@ -604,7 +633,7 @@ class WesterlundTest:
 
             wysq = self._lrvar_kernel(dytmp, self.lrwindow)
 
-            # --- Residual u calculation ---
+            # --- Residual u calculation (Dimension Mismatch Fix) ---
             # lr_count = count of [constant, trend, ly, lx..., dy_lags...]
             lr_count = alpha_idx + 1 + self.nox + blag
             
@@ -613,6 +642,7 @@ class WesterlundTest:
 
             u_vec = np.full(ti_orig, np.nan)
             u_vec[valid_lr] = dy[valid_lr] - (RHS[valid_lr, :lr_count] @ model.params[:lr_count])
+
             
             if self.westerlund:
                 if blag > 0: u_vec[:blag + 1] = np.nan
@@ -621,7 +651,7 @@ class WesterlundTest:
             wusq = self._lrvar_kernel(u_vec, self.lrwindow)
             aonesemi = np.sqrt(wusq / wysq) if wysq > 0 else 0
 
-            # kp: cons + trend + nox + lags + nox*(lags + leads + 1)
+            # Stata kp: cons + trend + nox + lags + nox*(lags + leads + 1)
             kp_stata = int(self.constant) + int(self.trend) + self.nox + blag + self.nox*(blag + blead + 1)
 
             if self.westerlund:
@@ -642,7 +672,7 @@ class WesterlundTest:
         Ga = np.mean([s['tnorm'] * s['ai'] / s['aonesemi'] for s in indiv_stats])
 
         # ============================================================================
-        # PASS 1.5: Aggregate Mean-Group Coefficients
+        # PASS 1.5: Aggregate Mean-Group Coefficients (Stata mgdisplay logic)
         # ============================================================================
         # 1. Error Correction (Alpha) Aggregation
         if is_boot == False:
@@ -665,7 +695,7 @@ class WesterlundTest:
 
             # 3. Call MG Display with the auto flag
             # If self.auto is True, the display method will print the warning about omitted SR terms
-            self._mg_display(
+            self.mg_results = self._mg_display(
                 mg_results={
                     'Variable': 'ec (alpha)',
                     'Coef.': mg_alpha_val,
@@ -674,7 +704,7 @@ class WesterlundTest:
                     'P>|t|': 2 * (1 - stats.t.cdf(np.abs(mg_alpha_val / se_mg_alpha), df=n_groups-1))
                 },
                 lr_results=lr_results_list,
-                auto=self.auto
+                auto=self.auto # Replicates Stata's conditional display
             )
         
         # ============================================================================
@@ -720,6 +750,7 @@ class WesterlundTest:
 
             u_pool = np.full(ti, np.nan)
             u_pool[valid_lr_pool] = dy[valid_lr_pool] - (full_X[valid_lr_pool, :lr_c_pool] @ mod_full.params[:lr_c_pool])
+    
             
             if self.westerlund:
                 if mean_lag > 0: u_pool[:mean_lag+1] = np.nan
@@ -828,7 +859,7 @@ class WesterlundTest:
         - This function relies on `_get_ts_map` and `_get_lag_lead` to ensure that 
           lags and leads correctly handle any gaps in the time index `tv`.
         - The column names generated here are used for labeling results in 
-          `_reg_display` when the `noisily` flag is active.
+          `_reg_display` when the `verbose` flag is active.
         - The ordering is critical because the main estimation routine assumes 
           that the error correction coefficient ($\alpha$) is located at the index 
           immediately following the deterministic terms.
@@ -877,8 +908,10 @@ class WesterlundTest:
         Validates panel structure, enforces time-series continuity, and checks for 
         observation sufficiency.
 
-        This method ensures that the dataset is properly sorted and that each cross-sectional 
-        unit (group) meets the minimum requirements for estimating the Error Correction Model (ECM).
+        This method replicates the data-preparation guardrails found in Stata's 
+        `tsset` and `marksample` routines. It ensures that the dataset is properly 
+        sorted and that each cross-sectional unit (group) meets the minimum 
+        requirements for estimating the Error Correction Model (ECM).
 
         Returns
         -------
@@ -1285,7 +1318,8 @@ class WesterlundTest:
         boot_dist = {}
         boot_pvals = {}
         if self.bootstrap > 0:
-            print(f"Bootstrapping {self.bootstrap} replications...")
+            if self.verbose:
+                print(f"Bootstrapping {self.bootstrap} replications...")
             boot_dist = self._bootstrap_run(df) # Returns {Gt: [...], Ga: [...], ...}
             
             for k in ["Gt", "Ga", "Pt", "Pa"]:
@@ -1317,11 +1351,14 @@ class WesterlundTest:
                 'n_groups': len(unit_results),
                 'avg_obs': unit_results['obs'].mean(),
                 'model_type': 'constant' if self.constant and not self.trend else 'trend' if self.trend else 'none'
-            }
+            },
+            'mg_results': self.mg_results,
+            'indiv_reg': self.indiv_reg
         }
 
         # 5. Output to Console
-        self._display_final(main_stats, boot_pvals)
+        if self.verbose:
+            self._display_final(main_stats, boot_pvals)
         
         return self.results_bundle
 
@@ -1401,14 +1438,15 @@ class WesterlundTest:
         N = len(self.raw_data[self.id_var].unique())
         sqrt_N = np.sqrt(N)
         
-        print("\n" + "="*75)
-        print(f"Westerlund ECM Panel Cointegration Tests")
-        print(f"Series: {self.y_var} ~ {', '.join(self.x_vars)}")
-        print(f"N (Groups): {N}")
-        print(f"Lags: {self.minlag}-{self.maxlag} | Leads: {self.minlead}-{self.maxlead} | Window: {self.lrwindow}")
-        print("="*75)
-        print(f"{'Statistic':<10} | {'Value':<10} | {'Z-score':<10} | {'P-value':<10} | {'Robust P':<10}")
-        print("-" * 75)
+        if self.verbose:
+            print("\n" + "="*75)
+            print(f"Westerlund ECM Panel Cointegration Tests")
+            print(f"Series: {self.y_var} ~ {', '.join(self.x_vars)}")
+            print(f"N (Groups): {N}")
+            print(f"Lags: {self.minlag}-{self.maxlag} | Leads: {self.minlead}-{self.maxlead} | Window: {self.lrwindow}")
+            print("="*75)
+            print(f"{'Statistic':<10} | {'Value':<10} | {'Z-score':<10} | {'P-value':<10} | {'Robust P':<10}")
+            print("-" * 75)
 
         for name in ['Gt', 'Ga', 'Pt', 'Pa']:
             val = results[name]
@@ -1427,14 +1465,17 @@ class WesterlundTest:
             
             pval = stats.norm.cdf(z)
             rob_p = f"{boot_pvals[name]:.3f}" if boot_pvals else "-"
-            print(f"{name:<10} | {val:<10.3f} | {z:<10.3f} | {pval:<10.3f} | {rob_p:<10}")
-        print("="*75)
+            if self.verbose:
+                print(f"{name:<10} | {val:<10.3f} | {z:<10.3f} | {pval:<10.3f} | {rob_p:<10}")
+        
+        if self.verbose:
+            print("="*75)
     
     def _reg_display(self, params, bse, tvalues, pvalues, title="Regression Results"):
         """
         Formats and prints a detailed coefficient table for unit-specific regressions.
 
-        This method is primarily used when the `noisily` flag is active to provide 
+        This method is primarily used when the `indiv_ecm` flag is active to provide 
         transparency into the individual Error Correction Model (ECM) estimations 
         that form the basis of the Mean-Group statistics ($G_t$ and $G_a$).
 
@@ -1453,6 +1494,12 @@ class WesterlundTest:
             The header title for the regression table, typically identifying 
             the cross-sectional unit (ID) and the lag/lead specification used. 
             Defaults to "Regression Results".
+
+        Returns
+        -------
+        results_df : pandas.DataFrame
+            A DataFrame containing the coefficients, standard errors, t-statistics,
+            and p-values.
 
         Process
         -------
@@ -1484,15 +1531,16 @@ class WesterlundTest:
             't': tvalues,
             'P>|t|': pvalues
         })
-        print(f"\n{title}")
-        print("-" * 60)
-        print(results_df.to_string())
-        print("-" * 60)
+        if self.verbose:
+            print(f"\n{title}")
+            print("-" * 60)
+            print(results_df.to_string())
+            print("-" * 60)
+        return results_df
     
     def _mg_display(self, mg_results, lr_results, auto=False):
         """
-        Formats and prints the aggregated Mean-Group (MG) results, replicating the 
-        reporting structure of Stata's 'xtwest' MG output.
+        Formats and prints the aggregated Mean-Group (MG) results.
 
         This method displays the average speed of adjustment (the error correction term) 
         and the average long-run equilibrium relationship ($\beta$ coefficients) across 
@@ -1538,21 +1586,28 @@ class WesterlundTest:
           level, while the Error Correction Term indicates how much of the 
           disequilibrium is corrected in each period.
         """
-        print("\n" + "="*60)
-        print("Mean-group error-correction model")
-        if auto:
-            print("Short run coefficients apart from the error-correction term are omitted")
-            print("as lag and lengths might differ between cross-sectional units.")
         
-        # Display the Error Correction / MG results
-        print("\nError Correction Term (Alpha):")
-        print(pd.DataFrame([mg_results]).to_string(index=False))
+        if self.verbose:
+            print("\n" + "="*60)
+            print("Mean-group error-correction model")
+            if auto:
+                print("Short run coefficients apart from the error-correction term are omitted")
+                print("as lag and lengths might differ between cross-sectional units.")
+            
+            # Display the Error Correction / MG results
+            print("\nError Correction Term (Alpha):")
+            print(pd.DataFrame([mg_results]).to_string(index=False))
+            
+            print("\nEstimated long-run relationship and short run adjustment")
         
-        print("\nEstimated long-run relationship and short run adjustment")
         # This matches the second 'eret disp' in Stata
         lr_df = pd.DataFrame(lr_results)
-        print(lr_df.to_string(index=False))
-        print("="*60 + "\n")
+
+        if self.verbose:
+            print(lr_df.to_string(index=False))
+            print("="*60 + "\n")
+        
+        return lr_df
     
     def plot_bootstrap(self, 
                        title="Westerlund Panel Cointegration Test (Bootstrap)",
@@ -1622,6 +1677,7 @@ class WesterlundTest:
           before plotting.
         - The x-axis range is automatically expanded by one standard deviation 
           to ensure the tails of the distribution are visible.
+        - This method requires `matplotlib`, `seaborn`, and `scipy` to be installed.
         """
         
         # 1. Check if results exist
@@ -1665,7 +1721,7 @@ class WesterlundTest:
                 # 5% Critical Value (Blue Dashed)
                 # Westerlund tests are typically lower-tail tests (reject if stat < CV)
                 cv_val = np.percentile(data, 5)
-                ax.axvline(cv_val, color=colors.get('cv', '#0072B2'), linestyle='--', linewidth=1.5, label='5% Crit Value')
+                ax.axvline(cv_val, color=colors.get('cv', '#0072B2'), linestyle='--', linewidth=1.5, label='5% Critical Value')
 
                 # Display Stats
                 p_val = p_vals.get(stat, np.nan)
