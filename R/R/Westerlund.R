@@ -31,6 +31,8 @@
 #' @param westerlund Logical. If \code{TRUE}, enforces additional restrictions: at
 #'   least a constant must be included (constant and/or trend) and at most one
 #'   regressor may be specified.
+#' @param aic Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges.
+#'   If \code{FALSE}, uses BIC.
 #' @param bootstrap Integer. If \code{bootstrap > 0}, runs an internal bootstrap
 #'   routine with \code{bootstrap} replications and returns bootstrap p-values
 #'   for the raw statistics. If \code{bootstrap <= 0} (default \code{-1}), no
@@ -149,6 +151,7 @@ westerlund_test <- function(data,
                    lags,              # Can be a single integer or a vector c(min, max)
                    leads = NULL,      # Can be a single integer or a vector c(min, max)
                    westerlund = FALSE,
+                   aic = TRUE,
                    bootstrap = -1,    # Default -1
                    indiv.ecm = FALSE,
                    lrwindow = 2,
@@ -224,11 +227,11 @@ westerlund_test <- function(data,
 
   if (bootstrap > 0) {
     if(verbose)cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
-    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, bootstrap, indiv.ecm = FALSE, lrwindow = lrwindow, verbose = verbose)
+    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, aic, bootstrap, indiv.ecm = FALSE, lrwindow = lrwindow, verbose = verbose)
     boot_dist <- boot_res$BOOTSTATS
   }
 
-  plain_res <- WesterlundPlain(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, lrwindow, westerlund, bootno = TRUE, indiv.ecm = indiv.ecm, verbose = verbose)
+  plain_res <- WesterlundPlain(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, lrwindow, westerlund, aic, bootno = TRUE, indiv.ecm = indiv.ecm, verbose = verbose)
 
   # ----------------------------------------------------------------------------
   # 7. Mean Group (MG) Estimation and Display
@@ -283,6 +286,7 @@ westerlund_test <- function(data,
     constant = constant,
     trend = trend,
     westerlund = westerlund,
+    aic = aic,
     meanlag = plain_res$settings$meanlag,
     meanlead = plain_res$settings$meanlead,
     realmeanlag = plain_res$settings$realmeanlag,
@@ -637,11 +641,11 @@ get_diff <- function(vec, tvec) {
 #'   variance calculations via \code{\link{calc_lrvar_bartlett}}.
 #' @param westerlund Logical. If \code{TRUE}, uses a Westerlund-specific
 #'   information criterion and trimming logic for variance estimation.
+#' @param aic Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges.
+#'   If \code{FALSE}, uses BIC.
 #' @param bootno Logical. If \code{TRUE}, suppresses certain header outputs,
 #'   typically used when called from a bootstrap routine.
-#' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions..
-#' @param debug Logical. If \code{TRUE}, provides additional debugging information
-#'   and suppresses progress indicators.
+#' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
 #' @param verbose Logical. If \code{TRUE}, prints progress messages to the console.
 #'
 #' @details
@@ -706,11 +710,12 @@ get_diff <- function(vec, tvec) {
 #' @seealso \code{\link{westerlund_test}}, \code{\link{WesterlundBootstrap}},
 #'   \code{\link{calc_lrvar_bartlett}}, \code{\link{get_lag}}
 #'
+#' @importFrom stats BIC
 #' @export
 WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
                             constant = FALSE, trend = FALSE, lags, leads = NULL,
-                            lrwindow = 2, westerlund = FALSE, bootno = FALSE,
-                            indiv.ecm = FALSE, debug = FALSE, verbose = FALSE) {
+                            lrwindow = 2, westerlund = FALSE, aic = TRUE,
+                            bootno = FALSE, indiv.ecm = FALSE, verbose = FALSE) {
 
   if (bootno & verbose) cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
 
@@ -781,7 +786,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 
     currlag <- maxlag; currlead <- maxlead
 
-    # --- AIC Selection Loop ---
+    # --- AIC/BIC Selection Loop ---
     if (auto) {
       curroptic <- Inf; curroptlag <- NA; curroptlead <- NA
 
@@ -839,7 +844,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
             rss <- sum(resid(mod)^2)
             n_obs <- sum(valid)
 
-            # --- AIC Calculation ---
+            # --- AIC/BIC Calculation ---
             if(westerlund) {
               # Penalty: 2*(currlag + currlead + cons + tren + 1)
               nparams_stata <- l + ld + (if(constant) 1 else 0) + (if(trend) 1 else 0) + 1
@@ -850,7 +855,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
               # Note: Stata's 'estat ic' typically uses -2*LL + 2*k.
               # For OLS, -2LL = N + N*log(2*pi) + N*log(RSS/N).
               # We use R's AIC() which follows -2LL + 2k.
-              ic <- AIC(mod)
+              ic <- if(aic) AIC(mod) else BIC(mod)
             }
             if (ic < curroptic) {
               curroptic <- ic; curroptlag <- l; curroptlead <- ld
@@ -1043,7 +1048,10 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
       }
     }
 
-    if (bootno && !indiv.ecm && counter > (dots * length(ids)/10) && verbose) {if (!debug) cat("."); dots<-dots+1}
+    if (bootno && !indiv.ecm && counter > (dots * length(ids) / 10) && verbose) {
+      cat(".")
+      dots <- dots + 1
+    }
   }
   if (bootno & verbose) cat("\n")
 
@@ -1268,9 +1276,10 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #'   or range. Defaults to 0 if \code{NULL}.
 #' @param westerlund Logical. If \code{TRUE}, uses Westerlund-style information
 #'   criterion and trimming logic in the bootstrap setup.
+#' @param aic Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges.
+#'   If \code{FALSE}, uses BIC.
 #' @param bootstrap Integer. Number of bootstrap replications.
 #' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
-#' @param debug Logical. If \code{TRUE}, prints debugging output.
 #' @param lrwindow Integer. Bartlett kernel window forwarded to
 #'   \code{\link{WesterlundPlain}} during re-estimation.
 #' @param verbose Logical. If \code{TRUE}, prints additional output.
@@ -1316,9 +1325,8 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #' @export
 WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
                                 constant = FALSE, trend = FALSE, lags, leads = NULL,
-                                westerlund = FALSE, bootstrap = 100,
-                                indiv.ecm = FALSE, debug = FALSE, lrwindow = 2,
-                                verbose = FALSE) {
+                                westerlund = FALSE, aic = TRUE, bootstrap = 100,
+                                indiv.ecm = FALSE, lrwindow = 2, verbose = FALSE) {
 
   if (verbose) cat("\nBootstrapping critical values under H0\n")
 
@@ -1430,7 +1438,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
             } else {
               # AIC: Stata includes constant and sigma in k.
               # R's logLik includes them too.
-              AIC(mod)
+              ic <- if(aic) AIC(mod) else BIC(mod)
             }
 
             if (!is.na(ic) && ic < curroptic) {
@@ -1704,7 +1712,7 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       yvar = "booty", xvars = paste0("boot", xvars),
       constant = constant, trend = trend,
       lags = lags, leads = leads,
-      lrwindow = lrwindow, westerlund = westerlund,
+      lrwindow = lrwindow, westerlund = westerlund, aic = aic,
       bootno = FALSE, verbose = verbose
     )
 
@@ -1835,10 +1843,11 @@ shiftNA <- function(v, k) {
 #' @param realmeanlag Numeric. Exact average selected lag length.
 #' @param realmeanlead Numeric. Exact average selected lead length.
 #' @param auto Logical/Integer. If non-zero, the output header reports
-#'   AIC-selected lag/lead averages.
+#'   AIC/BIC-selected lag/lead averages.
 #' @param westerlund Logical. If \code{TRUE}, uses hard-coded Westerlund-specific
 #'   moment constants for standardization.
-#' @param mg Logical. Reserved for future use (mean-group compatibility).
+#' @param aic Logical. If \code{TRUE}, AIC was used for lag/lead selection; If
+#'   \code{FALSE}, BIC was used.
 #' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
@@ -1899,7 +1908,7 @@ DisplayWesterlund <- function(stats,
                               realmeanlead = -1,
                               auto = 0,
                               westerlund = FALSE,
-                              mg = FALSE,
+                              aic = TRUE,
                               verbose = FALSE) {
 
   # Extract statistics
@@ -1924,12 +1933,31 @@ DisplayWesterlund <- function(stats,
 
 
   if (auto) {
-    roundedrealmeanlag <- round(realmeanlag, 2)
-    if (verbose) cat(sprintf("Average AIC selected lag length: %s\n", format(roundedrealmeanlag, nsmall=2)))
+    # 1. Determine the correct label based on user settings
+    # Uses AIC if either aic or westerlund is TRUE; otherwise defaults to BIC
+    ic_label <- if (aic || westerlund) "AIC" else "BIC"
 
+    # 2. Process Lag Length
+    roundedrealmeanlag <- round(realmeanlag, 2)
+    if (verbose) {
+      cat(sprintf(
+        "Average %s selected lag length: %s\n",
+        ic_label,
+        format(roundedrealmeanlag, nsmall = 2)
+      ))
+    }
+
+    # 3. Process Lead Length
     roundedrealmeanlead <- round(realmeanlead, 2)
-    if (verbose) cat(sprintf("Average AIC selected lead length: %s\n", format(roundedrealmeanlead, nsmall=2)))
+    if (verbose) {
+      cat(sprintf(
+        "Average %s selected lead length: %s\n",
+        ic_label,
+        format(roundedrealmeanlead, nsmall = 2)
+      ))
+    }
   }
+
   if (verbose) cat("\n")
 
   # ----------------------------------------------------------------------------

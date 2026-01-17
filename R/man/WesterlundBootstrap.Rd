@@ -22,9 +22,9 @@ WesterlundBootstrap(
   lags,
   leads = NULL,
   westerlund = FALSE,
+  aic = TRUE,
   bootstrap = 100,
   indiv.ecm = FALSE,
-  debug = FALSE,
   lrwindow = 2,
   verbose = FALSE
 )
@@ -52,11 +52,11 @@ WesterlundBootstrap(
 
   \item{westerlund}{Logical. If \code{TRUE}, uses a Westerlund-style information criterion and trimming logic in the bootstrap setup, matching the \code{westerlund} mode used elsewhere.}
 
+  \item{aic}{Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges. If \code{FALSE}, uses BIC.}
+
   \item{bootstrap}{Integer. Number of bootstrap replications.}
 
   \item{indiv.ecm}{Logical. If \code{TRUE}, gets output of individual ECM regressions..}
-
-  \item{debug}{Logical. If \code{TRUE}, prints debugging output and may relax some quiet behaviour.}
 
   \item{lrwindow}{Integer. Bartlett kernel window (maximum lag) forwarded to \code{\link{WesterlundPlain}} during bootstrap re-estimation.}
 

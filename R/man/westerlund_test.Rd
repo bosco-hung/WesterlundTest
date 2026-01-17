@@ -20,6 +20,7 @@ westerlund_test(
   lags,
   leads = NULL,
   westerlund = FALSE,
+  aic = TRUE,
   bootstrap = -1,
   indiv.ecm = FALSE,
   lrwindow = 2,
@@ -46,6 +47,8 @@ westerlund_test(
   \item{leads}{Integer or length-2 integer vector, or \code{NULL}. Fixed lead order or range \code{c(min,max)} for the short-run lead length \eqn{q}. If \code{NULL}, defaults to 0.}
 
   \item{westerlund}{Logical. If \code{TRUE}, enforces additional restrictions: at least a constant must be included (constant and/or trend) and at most one regressor may be specified.}
+
+  \item{aic}{Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges. If \code{FALSE}, uses BIC.}
 
   \item{bootstrap}{Integer. If \code{bootstrap > 0}, runs an internal bootstrap routine with \code{bootstrap} replications and returns bootstrap p-values for the raw statistics. If \code{bootstrap <= 0} (default \code{-1}), no bootstrap is performed.}
 

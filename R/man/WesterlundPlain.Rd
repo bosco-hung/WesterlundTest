@@ -23,9 +23,9 @@ WesterlundPlain(
   leads = NULL,
   lrwindow = 2,
   westerlund = FALSE,
+  aic = TRUE,
   bootno = FALSE,
   indiv.ecm = FALSE,
-  debug = FALSE,
   verbose = FALSE
 )
 }
@@ -54,11 +54,11 @@ WesterlundPlain(
 
   \item{westerlund}{Logical. If \code{TRUE}, uses a Westerlund-specific information criterion and trimming logic for variance estimation.}
 
+  \item{aic}{Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges. If \code{FALSE}, uses BIC.}
+
   \item{bootno}{Logical. If \code{TRUE}, prints a short header and progress dots (intended for higher-level routines).}
 
   \item{indiv.ecm}{Logical. If \code{TRUE}, gets output of individual ECM regressions.}
-
-  \item{debug}{Logical. If \code{TRUE}, suppresses progress dots in some branches and can be used for debugging prints.}
 
   \item{verbose}{Logical. If \code{TRUE}, prints additional output.}
 }
@@ -147,7 +147,20 @@ time index propagate as missing values rather than shifting across gaps.
 }
 }
 \examples{
-\dontrun{
+\donttest{
+set.seed(123)
+N <- 5
+T <- 20
+df <- data.frame(
+  id = rep(1:N, each = T),
+  t  = rep(1:T, N),
+  y  = rnorm(N * T),
+  x1 = rnorm(N * T),
+  x2 = rnorm(N * T)
+)
+
+touse <- rep(TRUE, nrow(df))
+
 plain_res <- WesterlundPlain(
   data       = df,
   touse      = touse,
