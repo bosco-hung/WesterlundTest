@@ -131,7 +131,7 @@
 #' print(res_plain$test_stats)
 #'
 #' # 3. Run Bootstrap Test with automatic lag selection
-#' # Note: bootstrap replications are kept low for example speed
+#' # Note: bootstrap replications are kept low for example purposes
 #' res_boot <- westerlund_test(
 #'   data = df, yvar = "y", xvars = "x1",
 #'   idvar = "id", timevar = "time",

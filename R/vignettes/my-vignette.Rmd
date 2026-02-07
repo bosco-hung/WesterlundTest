@@ -5,6 +5,7 @@ vignette: >
   %\VignetteIndexEntry{Westerlund: Panel Cointegration Tests Based on Westerlund (2007)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+bibliography: references.bib
 ---
 
 ```{r, include = FALSE}
@@ -14,55 +15,296 @@ knitr::opts_chunk$set(
 )
 ```
 
-# Westerlund: Panel Cointegration Tests Based on Westerlund (2007)
+# Introduction
+Econometric models, such as the Autoregressive Distributed Lag (ARDL) models, are increasingly used to analyze the long-run equilibrium relationship between a dependent variable $y$ and a set of independent variables $x$ across a panel of $N$ cross-sectional units over $T$ time periods [@pesaran_bounds_2001; @strom_autoregressive_1999]. Before applying such models to the panel data, one has to first determine if a long-run equilibrium relationship exists between the variables using a cointegration test. However, panel data often suffer from the problem of cross-sectional dependence (CD/CSD), i.e. the units of observations are not independent of one another, and this is typically caused by unobserved common factors that affect all units (e.g. global financial crisis in the case of investment flows) [@pesaran_general_2021]. Traditional residuals-based tests like the Pedroni panel cointegration test enforce strict exogeneity constraints and are not robust to cross-sectional dependence, so they are vulnerable to over-rejection [@pedroni_panel_2004]. In cases of cross-sectional dependence, tests based on structural dynamics like the @westerlund_testing_2007 test have to be used, which is now only available on Stata [@persyn_error-correctionbased_2008].
 
-`Westerlund` is an R package implementing a functional approximation of the four panel cointegration tests developed by **Westerlund (2007)**. Unlike traditional residual-based tests, these statistics are based on structural dynamics. They test the null hypothesis of no cointegration by determining whether the error-correction term in a conditional error-correction model (ECM) is equal to zero.
+This vignette introduces a R functional approximation implementation of the @westerlund_testing_2007 tests, \CRANpkg{Westerlund}, which can also be accessed at [https://github.com/bosco-hung/WesterlundTest](https://github.com/bosco-hung/WesterlundTest).^[A Python version is also available at PyPI ([https://pypi.org/project/Westerlund/](https://pypi.org/project/Westerlund/)) but it will not discussed here in this vignette.] The implementations provide similar functionalities of the Stata command `xtwest` developed by @persyn_error-correctionbased_2008, including the calculation of the four primary test statistics ($G_\tau$, $G_\alpha$, $P_\tau$, $P_\alpha$) through asymptotic standardization using moments from @westerlund_testing_2007, and a bootstrap procedure to handle cross-sectional dependence. An additional bootstrapping visualization function is added to facilitate the examination of the bootstrap distribution and significance of the statistics of interest. It also exploits R's software environment to provide reusing functionality that benefits further analysis.
 
-## Key Features
+This vignette starts by discussing the econometric model developed by @westerlund_testing_2007. Then, it discusses the R implementations. It proceeds with some points to note and implementation examples. It closes with some concluding remarks.
 
-The package replicates the logic of the Westerlund (2007) methodology, including:
-* **Four Test Statistics**: Computes $G_t$, $G_a$, $P_t$, and $P_a$.
-* **Flexible Dynamics**: Allows for unit-specific lag and lead lengths.
-* **Automated Selection**: Built-in AIC selection logic for optimal lag and lead lengths.
-* **Bootstrap Procedure**: Robust p-values to handle cross-sectional dependence.
-* **Kernel Estimation**: Bartlett kernel long-run variance estimation.
-* **Gap Handling**: Strict time-series continuity checks to ensure valid econometric results.
+# The econometric model
+The Westerlund test is based on a structural equation known as the Conditional Error Correction Model (ECM):
 
-## Installation
 
-You can install the development version of `Westerlund` from GitHub using the `devtools` package:
+\begin{equation}
+    \Delta y_{it} = \underbrace{\delta'_i d_t}_{\text{Deterministics}} + \underbrace{\alpha_i (y_{i,t-1} - \beta'_i x_{i,t-1})}_{\text{Long-Run Equilibrium}} + \underbrace{\sum_{j=1}^{p_i} \alpha_{ij} \Delta y_{i,t-j} + \sum_{j=-q_i}^{p_i} \gamma_{ij} \Delta x_{i,t-j}}_{\text{Short-Run Dynamics}} + e_{it}
+    (\#eq:ECM)
+\end{equation}
+
+
+where its core lies in the long-run equilibrium term $\alpha_i (y_{i,t-1} - \beta'_i x_{i,t-1})$.^[ $-\alpha_i\beta'_i$ is sometimes written as $\lambda'_i$.] The expression $y_{i,t-1} - \beta'_i x_{i,t-1}$ represents the deviation from equilibrium in the previous time period. If variables $y$ and $x$ are cointegrated, they move together in the long run according to the relationship $y_{it} = \beta_i x_{it}$. Therefore, the residual of $y_{i,t-1} - \beta'_i x_{i,t-1}$ represents the "error" or "disequilibrium" at time $t-1$. The parameter $\alpha_i$ determines how the system responds to that disequilibrium. If $\alpha_i < 0$ (Error Correction), the system is stable. If $y_{t-1}$ was "too high" relative to $x_{t-1}$ (positive error), the negative $\alpha_i$ forces $\Delta y_{it}$ to be negative. The variable $y$ falls to restore equilibrium. On the other hand, if $\alpha_i = 0$ (No Error Correction), the change in $y$ ($\Delta y_{it}$) does not depend on the previous level. The variables drift apart indiscriminately. This implies no cointegration.
+
+The summation terms $\sum_{j=1}^{p_i} \phi_{ij} \Delta y_{i,t-j} + \sum_{j=-q_i}^{p_i} \gamma_{ij} \Delta x_{i,t-j}$ represent the short-run shocks. These terms $\sum_{j=1}^{p_i} \phi_{ij} \Delta y_{i,t-j}$ capture the inertia in the system. By including sufficient lags of $\Delta y$ and $\Delta x$, we ensure that the regression residual $e_{it}$ is free of serial correlation (white noise), so as to ensure the validity of the OLS $t$-statistics. On the other hand, the term $\sum_{j=-q_i}^{0} \gamma_{ij} \Delta x_{i,t-j}$ includes current and future differences of $x$ for correcting for endogeneity. By projecting the error onto the leads and lags of $\Delta x$, the regressors become strictly exogenous with respect to the error term, allowing for valid asymptotic inference on $\alpha_i$.
+
+The term $\delta'_i d_t$ accounts for trends in the data that are not related to the stochastic relationship between $x$ and $y$. In Case 1 ($d_t = 0$), there is no intercept. The data has a zero mean; In Case 2 ($d_t = \{1\}$), there is a constant intercept. The data fluctuates around a non-zero level; Finally, in Case 3 ($d_t = \{1, t\}$), there is both an intercept and linear trend. The data drifts upward or downward over time.
+
+## Hypothesis Testing Framework
+
+The statistical test tests the value of $\alpha_i$ derived from the equation outlined in the following. Under the Null Hypothesis ($H_0$), there is no error correction, i.e. there is no cointegration exists for any unit:
+
+
+\begin{equation}
+    H_0: \alpha_i = 0 \quad \text{for all } i = 1 \dots N
+    (\#eq:H0)
+\end{equation}
+
+
+The Alternative Hypothesis ($H_1$) depends on which statistic is used (Group vs. Panel): In the case of group mean statistics ($G_\tau, G_\alpha$), they do not assume a common speed of adjustment. They test whether cointegration exists for at least one unit in the panel: 
+
+
+\begin{equation} 
+H_1^G: \alpha_i < 0 \quad \text{for at least one } i (\#eq:H1-G) 
+\end{equation}
+
+
+In the case of panel mean statistics ($P_\tau, P_\alpha$), they "pool" the information across the cross-sectional dimension and test whether cointegration exists for the entire panel as a whole, assuming a homogeneous speed of adjustment: 
+
+
+\begin{equation} 
+H_1^P: \alpha_i = \alpha < 0 \quad \text{for all } i (\#eq:H1-P) 
+\end{equation}
+
+
+
+# Code description
+The code features a main driver: `westerlund_test`. This primary interface connects the functions to perform input validation and data sorting, as well as to handle the branching logic between asymptotic and bootstrap inference, which are summarized in the structure diagram below. It takes the following arguments: 
 
 ```r
-# Install devtools if you haven't already
-# install.packages("devtools")
-
-# Install Westerlund
-devtools::install_github("bosco-hung/Westerlund/R", build_vignettes = TRUE)
-
-## Qucik Start
-```r
-library(Westerlund)
-
-# Ensure data is sorted by ID and Time
-results <- westerlund_test(
-  data = my_data,
-  yvar = "ln_gdp",
-  xvars = c("ln_energy", "ln_capital"),
-  idvar = "country",
-  timevar = "year",
-  constant = TRUE,
-  trend = FALSE,
-  lags = c(1, 3),      # AIC search between 1 and 3 lags
-  leads = c(0, 2),     # AIC search between 0 and 2 leads
-  bootstrap = 100,     # Run 100 bootstrap replications
-  lrwindow = 3         # Bartlett kernel window size
-)
-
-# View the results table
-print(results)
+westerlund_test(data,
+                yvar,
+                xvars,
+                idvar,
+                timevar,
+                constant = FALSE,
+                trend = FALSE,
+                lags,              # Can be a single integer or a vector
+                leads = NULL,      # Can be a single integer or a vector
+                westerlund = FALSE,
+                aic = TRUE,
+                indiv.ecm = FALSE,
+                bootstrap = -1,    # Default -1
+                lrwindow = 2,
+                verbose = FALSE)
 ```
 
-## References
-Westerlund, J. (2007). Testing for Error Correction in Panel Data. Oxford Bulletin of Economics and Statistics, 69(6), 709-748.
+where `data` is the panel data input (ideally balanced panel), `yvar` is a string specifying the name of the dependent variable, and `xvars` is a character vector of regressors entering the long-run relationship, allowing a maximum of six variables or a single variable if `westerlund=TRUE`. The `idvar` string identifies cross-sectional units, while `timevar` identifies the time column. Inclusion of an intercept or a linear trend is controlled by the `constant` and `trend` logical arguments, where setting `trend=TRUE` necessitates that `constant` also be `TRUE`. The short-run lag length $p$ is defined by `lags`, and the lead length $q$ is defined by `leads` (defaulting to 0 if `NULL`); both accept a single integer or a range provided as a vector, where the latter will enable auto selection using either AIC or BIC as the information criterion controlled by the `aic` parameter.^[The `aic` parameter is available starting from the 0.1.2 version.] If the `westerlund` flag is `TRUE`, the function enforces additional restrictions requiring at least a constant and no more than one regressor. The `indiv.ecm` parameter manages whether individual regression outputs will be obtained. Finally, `bootstrap` determines the number of replications used to calculate bootstrap $p$-values for the statistics, `lrwindow` sets the window parameter for long-run variance estimation, which defaults to 2, and `verbose` toggles the display of detailed information.
 
-Persyn, D., & Westerlund, J. (2008). Error-Correction-Based Cointegration Tests for Panel Data. Stata Journal, 8(2), 232-241.
+The implementation enforces strict time-series continuity by checking for time gaps:
+\begin{equation}
+\Delta t = t_{i,s} - t_{i,s-1}
+(\#eq:delta)
+\end{equation}
+
+If $\Delta t > 1$, a "hole" is identified, and the function halts to prevent invalid differencing. The data is sorted to ensure the vector $Y$ follows a block-unit structure:
+\begin{equation}
+Y = [y_{1,1}, y_{1,2}, \dots, y_{1,T}, \quad y_{2,1}, \dots, y_{2,T}, \quad \dots, \quad y_{N,T}]'
+(\#eq:block)
+\end{equation}
+
+However, it is expected that the data input will be a balanced panel, as other preceding or subsequent parts of the typical estimation workflow will demand or prefer a balanced panel. Moreover, as the Westerlund test involves a high density of parameters, a balanced panel is preferred to preserve as many observations as possible, especially in the case of a small panel (e.g. macroeconomics panel with annual data). The workflow integration will be discussed later.
+
+## Econometric Estimation Logic
+
+The `WesterlundPlain` function estimates ECMs and aggregates them into panel statistics.
+
+### Unit-Level Estimation
+
+For each unit $i$, the code estimates the unrestricted ECM explained in Equation \@ref(eq:ECM). If `auto` selection is enabled, the code minimizes the Akaike information criterion (AIC) or the Bayesian information criterion (BIC). If `westerlund=TRUE`, it uses the specific penalty:
+
+
+\begin{equation}
+    AIC(p, q) = \ln\left(\frac{RSS_i}{T_i - p - q - 1}\right) + \frac{2(p + q + \text{det} + 1)}{T_i - p_{max} - q_{max}} (\#eq:AIC)
+\end{equation}
+
+
+### Long-Run Variance (HAC) Estimation
+
+The helper `calc_lrvar_bartlett` computes the Newey-West variance using a Bartlett kernel [@newey_automatic_1994]. Following the Stata convention, autocovariances $\hat{\gamma}_j$ are scaled by $1/n$:
+
+
+\begin{equation}
+    \hat{\omega}^2 = \hat{\gamma}_0 + 2 \sum_{j=1}^{M} \left(1 - \frac{j}{M+1}\right) \hat{\gamma}_j, \quad \hat{\gamma}_j = \frac{1}{n}\sum_{t=j+1}^{n} \hat{e}_t \hat{e}_{t-j} (\#eq:HAC)
+\end{equation}
+
+
+### Panel Statistics Construction
+
+#### Group Mean Statistics ($G$)
+The group mean statistics ($G$) are computed by averaging individual unit results. Following the completion of the unit-level ECMs, the code aggregates the individual speed-of-adjustment coefficients ($\hat{\alpha}_i$) and their standard errors:
+
+
+\begin{equation}
+G_\tau = \frac{1}{N} \sum_{i=1}^N \frac{\hat{\alpha}_i}{SE(\hat{\alpha}_i)} \quad \text{and} \quad G_\alpha = \frac{1}{N} \sum_{i=1}^N \frac{T_i \hat{\alpha}_i}{\hat{\alpha}_i(1)} (\#eq:G-tau)
+\end{equation}
+
+
+where $\hat{\alpha}_i(1) = \frac{\hat{\omega}_{ui}}{\hat{\omega}_{yi}}$ is the ratio of long-run standard deviations derived from the Bartlett-kernel HAC estimation described earlier.
+
+#### Pooled Panel Statistics ($P$)
+For pooled statistics ($P_\tau, P_\alpha$), the code partials out short-run dynamics and deterministics from $\Delta y_{it}$ and $y_{i,t-1}$ using the average lag and lead orders calculated across all units. The pooled coefficient $\hat{\alpha}_{pooled}$ is then estimated by aggregating these filtered residuals:
+
+\begin{equation}
+\hat{\alpha}_{pooled} = \left( \sum_{i=1}^N \sum_{t=1}^T \tilde{y}_{i,t-1}^2 \right)^{-1} \sum_{i=1}^N \sum_{t=1}^T \frac{1}{\hat{\alpha}_i(1)} \tilde{y}_{i,t-1} \Delta \tilde{y}_{it} (\#eq:alpha)
+\end{equation}
+
+The final statistics are then constructed as: 
+
+
+\begin{equation}
+P_\tau = \frac{\hat{\alpha}_{pooled}}{SE(\hat{\alpha}_{pooled})} \quad \text{and} \quad P_\alpha = T \cdot \hat{\alpha}_{pooled} (\#eq:P-tau)
+\end{equation}
+
+
+where $T$ represents the effective sample size after accounting for the loss of observations due to the chosen lag and lead lengths.
+
+## Standardization and Display
+
+The function `DisplayWesterlund` converts raw statistics $S$ into Z-scores using asymptotic moments $\mu_S$ and $\sigma_S$:
+
+
+\begin{equation}
+    Z_S = \frac{\sqrt{N}(S - \mu_S)}{\sigma_S} (\#eq:Z-score)
+\end{equation}
+
+
+The moments are retrieved from hard-coded matrices indexed by deterministic cases (1: None, 2: Constant, 3: Trend) and the number of regressors $K$ in the original @westerlund_testing_2007 paper.
+
+As the test is lower-tailed, the null of no cointegration is rejected if the observed statistic is significantly negative.
+
+## Bootstrap Inference
+
+As explained earlier, the Westerlund test allows the handling of cross-sectional dependence through a bootstrapping logic. To do so, the code implements a recursive sieve bootstrap under the null hypothesis ($H_0: \alpha_i = 0$) following a multi-stage process:
+
+1. **Null-Model Estimation:** For each unit $i$, the model is estimated under $H_0$. Residuals ($\hat{e}_{it}$) and regressor differences ($\Delta x_{it}$) are extracted and centered within each unit to ensure the bootstrap innovations have a zero mean. Centering is performed within each unit, whereas the mean of $\Delta x_{it}$ is calculated only over the "residual support" (rows where $\hat{e}_{it}$ is non-missing) to ensure the bootstrap innovations are consistent with the estimation sample.
+
+2. **Synchronized Temporal Shuffle:** To preserve the contemporaneous correlation structure $E[e_{it} e_{jt}] \neq 0$, the code implements a synchronized shuffling mechanism. First, it identifies $U$, the minimum number of valid residual observations across all units. A vector of $U$ indices is drawn with replacement and duplicated (expanding the pool to $2U$). A single vector of random draws $U \sim (0,1)$ is generated as a global shuffle key. A stable sort (using the original index as a tie-breaker) is applied to this key to create a master permutation. Every cross-sectional unit then draws its time-indices from the first $T_{ext}$ elements of this master permutation, so as to ensure that the cross-sectional "link" between units $i$ and $j$ at time $t$ remains intact in the simulated data.
+
+3. **Innovation Construction:** The bootstrap innovation ($u_{it}^*$) is constructed by combining the reshuffled residuals $e^*_{it}$ with the lags and leads of the centered regressor differences:
+   
+   \begin{equation}
+       u_{it}^* = e_{it}^* + \sum_{j=-q}^{p} \hat{\gamma}_{ij} \Delta x^*_{i,t-j}
+       (\#eq:innovation)
+   \end{equation}
+   
+   
+   The code utilizes a `shiftNA` helper function which initializes an `NA` vector of length $n$ and only populates the shifted indices if $n > |k|$. This ensures that any "out-of-bounds" shifts or boundary gaps result in `NA` values. These `NA`s propagate through the summation, so as to ensure the innovation $u_{it}^*$ is only valid where all components exist. These values are converted to zeros immediately before the recursive step to provide a clean initialization for the AR process.
+
+4. **Recursive Simulation:** The series of first-differences $\Delta y^*_{it}$ is generated recursively using the unit-specific autoregressive coefficients $\hat{\phi}_{ij}$:
+   
+   \begin{equation}
+       \Delta y^*_{it} = \sum_{j=1}^{p} \hat{\phi}_{ij} \Delta y^*_{i,t-j} + u_{it}^*
+       (\#eq:recursive)
+   \end{equation}
+   
+   
+   The recursion is performed for the full length of the reshuffled indices. After the loop, the first $p$ periods (the burn-in period) are explicitly set to `NA` to replicate the finite-sample behavior and degrees-of-freedom loss of the original test.
+
+5. **Integration:** The simulated differences are integrated to recover the level variables for both $y$ and $x$ using the `cumsum` function:
+   
+   \begin{equation}
+       y^*_{it} = \sum_{s=1}^t \Delta y^*_{is}, \quad X^*_{it} = \sum_{s=1}^t \Delta X^*_{is}
+       (\#eq:integration)
+   \end{equation}
+   
+   
+   Rows containing `NA` values (due to lags or padding) are dropped before the final panel is re-estimated using the `WesterlundPlain` routine.
+
+Finally, the Robust $p$-value is computed as:
+
+
+\begin{equation}
+p^* = \frac{\sum_{b=1}^B I(Stat^*_b \le Stat_{obs}) + 1}{B + 1}
+(\#eq:robust-p)
+\end{equation}
+
+where finite sample corrections are applied.
+
+## Visualization
+
+The R implementation provides the `plot_westerlund_bootstrap` function to visualize the results of the bootstrap procedure. It leverages the \CRANpkg{ggplot2} framework to create a faceted $2 \times 2$ grid for a side-by-side comparison of the group mean ($G_\tau, G_\alpha$) and panel ($P_\tau, P_\alpha$) statistics. This allows the researcher to observe if cointegration is supported by individual units or the panel as a whole. 
+
+Mathematically, given $B$ bootstrap replications, the function estimates the empirical null distribution using a kernel density estimator:
+
+
+\begin{equation}
+\hat{f}(s) = \frac{1}{B h} \sum_{b=1}^{B} K\left( \frac{s - \text{Stat}^*_b}{h} \right)
+(\#eq:kernel)
+\end{equation}
+
+where $Stat^*_b$ represents the simulated statistics for $b = 1, \dots, B$, $K(\cdot)$ is the Gaussian kernel, and $h$ is the bandwidth automatically determined by the `geom_density` geometry.
+
+The visualization logic is structured as follows. First, the area under the kernel density curve is shaded to represent the probability mass of the null hypothesis of no cointegration. Second, a solid vertical line (defaulting to orange) marks the calculated test statistic ($Stat_{obs}$) from the original sample. Third, a dashed vertical line (defaulting to blue) indicates the empirical $\alpha$-level critical value ($CV^*$), calculated as the $\alpha$-quantile of the bootstrap distribution. Fourth, each facet includes text labels for the exact values of $Stat_{obs}$ and $CV^*$ for precise interpretation.
+
+The null hypothesis is rejected at the $\alpha$ level if the observed statistic (solid line) lies to the *left* of the bootstrap critical value (dashed line). If the density mass is located significantly to the right of the observed statistic, the result is considered robust. Significant overlap between the density and the observed statistic suggests that asymptotic significance may be a false positive caused by cross-sectional dependence.
+
+## Integration with the Other Packages
+The \CRANpkg{Westerlund} package can be easily integrated into the workflow of the users investigating the long-run relationship of variables in panel data. Examinations of long-run dynamics often involve (1) testing the existence of cross-sectional dependence, (2) testing the order of integration, (3) testing the existence of cointegration, and finally (4) running the error-correction model tests. 
+
+Regarding cross-sectional dependence, in the R ecosystem, the Pesaran cross-sectional dependence test is available [@pesaran_general_2021] in `pcdtest` of the \CRANpkg{plm} package [@croissant_plm_2006]. Regarding the order of integration, the \CRANpkg{plm} package provides several first-generation tests, including the Levin-Lin-Chu (LLC) [@levin_unit_2002], Im-Pesaran-Shin (IPS) [@im_testing_2003], and Hadri stationarity tests [@hadri_testing_2000]. In case there is cross-sectional dependence, the \CRANpkg{plm} package also offers the second-generation Cross-sectionally Augmented IPS (CIPS) test proposed by @pesaran_simple_2007 which is robust to cross-sectional dependence. Finally, researchers can use \CRANpkg{PooledMeanGroup} or \CRANpkg{ARDL} to run mean group (MG) or panel mean group (PMG) ARDL models [@zientara_pooledmeangroup_2017; @natsiopoulos_ardl_2020]. 
+
+The \CRANpkg{Westerlund} package introduced by this vignette solves the road block regarding the test of the existence of cointegration.
+
+# Simple Implementation Examples
+This section provides a simple example of how to use the `westerlund_test` function to run both the asymptotic and bootstrap versions of the Westerlund test, as well as how to visualize the bootstrap results using the `plot_westerlund_bootstrap` function.
+
+This example uses a small synthetic panel dataset with 10 cross-sectional units and 30 time periods, where the dependent variable `y` and the independent variable `x1` are generated as random normal variables. After data generation, this example first runs the asymptotic version of the Westerlund test without bootstrapping, and then runs the bootstrap version with a low number of replications for demonstration purposes. The asymptotic test applies the following settings: constant included, 1 lag, and no leads. The bootstrap test applies the following settings: constant included, automatic lag selection between 0 and 1 using AIC (by default), and 50 bootstrap replications. 
+
+```{r, fig.width=6, fig.height=4}
+library(Westerlund)
+
+# 1. Generate a small synthetic panel dataset
+set.seed(123)
+N <- 10; T <- 30
+df <- data.frame(
+  id = rep(1:N, each = T),
+  time = rep(1:T, N),
+  y = rnorm(N * T),
+  x1 = rnorm(N * T)
+)
+
+# 2. Run Asymptotic (Plain) Test
+res_plain <- westerlund_test(
+  data = df, yvar = "y", xvars = "x1",
+  idvar = "id", timevar = "time",
+  constant = TRUE, lags = 1, leads = 0,
+  verbose = FALSE
+)
+print(res_plain$test_stats)
+
+# 3. Run Bootstrap Test with automatic lag selection
+# Note: bootstrap replications are kept low for example purposes
+res_boot <- westerlund_test(
+  data = df, yvar = "y", xvars = "x1",
+  idvar = "id", timevar = "time",
+  constant = TRUE, lags = c(0, 1),
+  bootstrap = 50, verbose = FALSE
+)
+
+# 4. Visualize the Bootstrap Results
+p <- plot_westerlund_bootstrap(res_boot)
+
+print(p)
+```
+
+# Points to Note
+
+There remains some implementation-level differences that would lead to minor discrepancies between the results given by the original `xtwest` function on Stata designed by @persyn_error-correctionbased_2008, and the R version outlined in this vignette (and the Python alternative). If you run the asymptotic test (no bootstrap), the results should be nearly identical (up to floating-point precision). If you run the bootstrap, the robust $p$-values will vary slightly. One should be careful about the marginally significant cases if the bootstrapping times $B$ is low. I provide some discussion of the known primary sources of differences and the implemented mitigation below.
+
+## Randomization
+
+The Random Number Generation (RNG) mechanisms in these languages, including Stata, are fundamentally different and difficult to align. RNG is used when cross-sectional dependence is handled during the bootstrap "shuffling" phase. The R implementation uses the standard `Mersenne-Twister` algorithm via `RNGkind`. As these languages utilize fundamentally different engines, the shuffling phase will produce distinct sequences even if identical seeds are specified.
+
+## OLS Equations
+
+Moreover, these languages use different underlying linear algebra libraries for solving the OLS equations in the unit-specific ECMs. R (`stats::lm`) uses QR decomposition, which offers higher stability and handles near-collinear regressors by pivoting. On the other hand, Python (`statsmodels.OLS`) by default uses the Moore-Penrose pseudoinverse (`pinv`) to solve the least squares problem.^[In the actual Python version, I have manually set it to use QR to align the results with R better.] 
+
+## Floating Point Drifts
+
+Since the levels are built via integration and recursion, tiny differences are magnified.
+
+# Conclusion
+
+The \CRANpkg{Westerlund} package offers a convenient alternative for users without access to Stata or who prefer using R to run the Westerlund test to test cointegration. It offers an intuitive implementation and also functional approximation of the original `xtwest` function, while also introducing a visualization tool and allowing the reuse of functionality that enhances its utility. 
+
+Meanwhile, the current \CRANpkg{Westerlund} implementation faces the same limitation of the `xtwest` function in that they can only address cases with at most six regressors due to their reliance on a hard-coded table. Future work could explore allowing users to simulate the moment to enhance the precision of estimations and allow the use of more regressors. However, as the Westerlund test has a high parameter density which makes it power-hungry and macro panel data often suffers from a small $N$ problem, use cases involving more than six regressors are probably less likely. Other pathways of future work would be to provide users with options to choose whether to apply finite sample correction, estimate the runtime, etc.
+

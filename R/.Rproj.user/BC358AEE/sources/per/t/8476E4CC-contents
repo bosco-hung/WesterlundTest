@@ -1503,8 +1503,8 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
 
     # 3) newttt: for each id, draw integers 1..U for each position, then take column mean as key
     # prevents 'ties' that occur with discrete integers
-    newttt <- matrix(runif(length(valid_ids) * base_len), 
-                 nrow = length(valid_ids), 
+    newttt <- matrix(runif(length(valid_ids) * base_len),
+                 nrow = length(valid_ids),
                  ncol = base_len)
 
     newtt_key <- colMeans(newttt)
