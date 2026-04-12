@@ -75,7 +75,8 @@
 #' \emph{raw} statistics are produced. This is often preferred in finite samples
 #' to account for nuisance parameter sensitivity.
 #'
-#' @return A list containing the following components:
+#' @return An object of class \code{westerlund_test}. This is a list containing
+#' the following components:
 #' \itemize{
 #'   \item \code{test_stats}: A named numeric vector containing:
 #'     \itemize{
@@ -314,7 +315,10 @@ westerlund_test <- function(data,
     mg_results = mg_results
   )
 
+  class(results_bundle) <- "westerlund_test"
+
   return(results_bundle)
+
 }
 
 # ------------------------------------------------------------------------------
@@ -697,6 +701,8 @@ get_diff <- function(vec, tvec) {
 #'   \item \code{results_df}: A summary \code{data.frame} containing all unit-level results in vectorized format.
 #'   \item \code{settings}: A list of parameters used in the routine:
 #'     \itemize{
+#'       \item \code{constant}: Logical indicating if a constant was included.
+#'       \item \code{trend}: Logical indicating if a trend was included.
 #'       \item \code{meanlag, meanlead}: Integer averages of the selected lags/leads.
 #'       \item \code{realmeanlag, realmeanlead}: Precise (floating-point) averages of lags/leads.
 #'       \item \code{auto}: Logical indicating if automatic lag/lead selection was active.
@@ -1245,7 +1251,7 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
     stats = list(Gt=Gt, Ga=Ga, Pt=Pt, Pa=Pa),
     indiv_data = indiv_data,
     results_df = results_df,
-    settings = list(meanlag=meanlag, meanlead=meanlead, realmeanlag=realmeanlag, realmeanlead=realmeanlead,auto=auto)
+    settings = list(constant=constant, trend=trend, meanlag=meanlag, meanlead=meanlead, realmeanlag=realmeanlag, realmeanlead=realmeanlead,auto=auto)
   ))
 }
 
@@ -2394,7 +2400,7 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 }
 
 # ==============================================================================
-# Main Function: plot_westerlund_bootstrap
+# S3 Method: plot.westerlund_test
 # ==============================================================================
 #' Plot Bootstrap Distributions for Westerlund ECM Panel Cointegration Tests
 #'
@@ -2404,7 +2410,7 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 #' the kernel density of bootstrap replications, the observed test statistic,
 #' and the left-tail bootstrap critical value.
 #'
-#' @param results A list containing bootstrap output. Must include
+#' @param x An object of class \code{westerlund_test}. Must include
 #'   \code{bootstrap_distributions} (a numeric matrix with 4 columns) and
 #'   \code{test_stats} (a named list or vector of observed statistics).
 #' @param title Character. The main title of the plot.
@@ -2415,26 +2421,23 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 #'   \code{fill} (density area), and \code{density} (density outline).
 #' @param lwd A named list of line widths. Expected names: \code{obs},
 #'   \code{crit}, and \code{density}.
-#' @param show_grid Logical. If \code{TRUE}, displays major panel grids
+#' @param show_grid Logical. If \code{TRUE}, displays major panel grids.
+#' @param ... Additional arguments passed to the plot method.
+#'
 #' @details
 #' \strong{Visualizing the Bootstrap Results:}
 #' The bootstrap distribution is used to provide robust inference when asymptotic
 #' normal approximations are unreliable (e.g., in small samples or with specific
 #' nuisance parameters).
 #'
-#'
-#'
 #' \strong{Plotting Logic:}
 #' The function transforms the results matrix into a long-format dataframe to
 #' leverage \code{ggplot2} faceting. For each statistic:
-#' \enumerate{
-#'   \item Only finite bootstrap draws are included.
-#'   \item An empirical density is estimated via \code{geom_density}.
-#'   \item The \eqn{\alpha}-level critical value is calculated as the
-#'     \code{conf_level} quantile of the bootstrap distribution.
-#'   \item Text annotations are added to each facet showing the exact
-#'     Observed and Critical Values.
-#' }
+#' 1. Only finite bootstrap draws are included.
+#' 2. An empirical density is estimated via \code{geom_density}.
+#' 3. The \eqn{\alpha}-level critical value is calculated as the \code{conf_level}
+#' quantile of the bootstrap distribution.
+#' 4. Text annotations are added to each facet showing the exact Observed and Critical Values.
 #'
 #' \strong{Interpretation:}
 #' The null hypothesis of no cointegration is rejected at the \eqn{\alpha}
@@ -2448,54 +2451,40 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 #' Westerlund, J. (2007). Testing for error correction in panel data.
 #' \emph{Oxford Bulletin of Economics and Statistics}, 69(6), 709--748.
 #'
-#' @seealso \code{\link{westerlund_test}}, \code{\link{WesterlundBootstrap}},
-#'   \code{\link{DisplayWesterlund}}
+#' @seealso \code{\link{westerlund_test}}, \code{\link{WesterlundBootstrap}}
 #'
 #' @examples
 #' \donttest{
-#' set.seed(123)
-#' mock_boot <- matrix(rnorm(400, mean = -5), ncol = 4)
-#' colnames(mock_boot) <- c("Gt", "Ga", "Pt", "Pa")
-
-#' mock_results <- list(
-#'   test_stats = list(Gt = -5.2, Ga = -11.0, Pt = -6.0, Pa = -13.0),
-#'   bootstrap_distributions = mock_boot
-#' )
-#' p <- plot_westerlund_bootstrap(mock_results, conf_level = 0.05)
-#'
-#' # Display the plot
-#' print(p)
-#'
-#' # Further customization
-#' p + ggplot2::theme_bw()
+#' # Assuming 'results' is an object of class 'westerlund_test'
+#' plot(results, conf_level = 0.05)
 #' }
-#'
 #'
 #' @import ggplot2
 #' @importFrom tidyr pivot_longer
 #' @importFrom scales percent
-#' @importFrom stats quantile
+#' @importFrom stats quantile aggregate
 #' @importFrom dplyr everything
+#' @method plot westerlund_test
 #' @export
-plot_westerlund_bootstrap <- function(results,
-                                      title = "Westerlund Test: Bootstrap Distributions",
-                                      conf_level = 0.05,
-                                      colors = list(
-                                        obs = "#D55E00",
-                                        crit = "#0072B2",
-                                        fill = "grey80",
-                                        density = "grey30"
-                                      ),
-                                      lwd = list(obs = 1, crit = 0.8, density = 0.5),
-                                      show_grid = TRUE) {
+plot.westerlund_test <- function(x,
+                                 title = "Westerlund Test: Bootstrap Distributions",
+                                 conf_level = 0.05,
+                                 colors = list(
+                                   obs = "#D55E00",
+                                   crit = "#0072B2",
+                                   fill = "grey80",
+                                   density = "grey30"
+                                 ),
+                                 lwd = list(obs = 1, crit = 0.8, density = 0.5),
+                                 show_grid = TRUE, ...) {
 
   # 1. Validation Logic
-  if (is.null(results$bootstrap_distributions)) {
+  if (is.null(x$bootstrap_distributions)) {
     stop("No bootstrap results found in the object. Ensure 'bootstrap' was enabled in the test.")
   }
 
   # 2. Data Transformation (Wide to Long for Faceting)
-  boot_df <- as.data.frame(results$bootstrap_distributions)
+  boot_df <- as.data.frame(x$bootstrap_distributions)
   colnames(boot_df) <- c("Gt", "Ga", "Pt", "Pa")
 
   # Reshape for ggplot2
@@ -2510,17 +2499,16 @@ plot_westerlund_bootstrap <- function(results,
   plot_data <- plot_data[is.finite(plot_data$Value), ]
 
   # 3. Calculate Reference Statistics per Group
-  # Extract observed stats
   obs_df <- data.frame(
-    Statistic = names(results$test_stats),
-    Observed = unname(unlist(results$test_stats))
+    Statistic = names(x$test_stats),
+    Observed = unname(unlist(x$test_stats))
   )
 
   # Calculate bootstrap critical values (left-tail quantiles)
   crit_df <- stats::aggregate(
     Value ~ Statistic,
     data = plot_data,
-    FUN = function(x) stats::quantile(x, conf_level)
+    FUN = function(v) stats::quantile(v, conf_level)
   )
   colnames(crit_df)[2] <- "CriticalValue"
 
@@ -2599,4 +2587,212 @@ plot_westerlund_bootstrap <- function(results,
   }
 
   return(p)
+}
+plot.westerlund_test <- function(x,
+                                 title = "Westerlund Test: Bootstrap Distributions",
+                                 conf_level = 0.05,
+                                 colors = list(
+                                   obs = "#D55E00",
+                                   crit = "#0072B2",
+                                   fill = "grey80",
+                                   density = "grey30"
+                                 ),
+                                 lwd = list(obs = 1, crit = 0.8, density = 0.5),
+                                 show_grid = TRUE, ...) {
+
+  # Ensure we are working with the results object
+  results <- x
+
+  # 1. Validation Logic
+  if (is.null(results$bootstrap_distributions)) {
+    stop("No bootstrap results found in the object. Ensure 'bootstrap' was enabled in the test.")
+  }
+
+  # 2. Data Transformation (Wide to Long for Faceting)
+  boot_df <- as.data.frame(results$bootstrap_distributions)
+  colnames(boot_df) <- c("Gt", "Ga", "Pt", "Pa")
+
+  # Reshape for ggplot2
+  plot_data <- tidyr::pivot_longer(
+    boot_df,
+    cols = dplyr::everything(),
+    names_to = "Statistic",
+    values_to = "Value"
+  )
+
+  # Filter out non-finite draws
+  plot_data <- plot_data[is.finite(plot_data$Value), ]
+
+  # 3. Calculate Reference Statistics per Group
+  obs_df <- data.frame(
+    Statistic = names(results$test_stats),
+    Observed = unname(unlist(results$test_stats))
+  )
+
+  # Calculate bootstrap critical values (left-tail quantiles)
+  crit_df <- stats::aggregate(
+    Value ~ Statistic,
+    data = plot_data,
+    FUN = function(val) stats::quantile(val, conf_level)
+  )
+  colnames(crit_df)[2] <- "CriticalValue"
+
+  # Merge for mapping
+  ref_lines <- merge(obs_df, crit_df, by = "Statistic")
+
+  # 4. Building the Plot
+  p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$Value)) +
+    ggplot2::geom_density(
+      fill = colors$fill,
+      color = colors$density,
+      alpha = 0.5,
+      linewidth = lwd$density
+    ) +
+
+    ggplot2::geom_vline(
+      data = ref_lines,
+      ggplot2::aes(xintercept = .data$Observed, color = "Observed"),
+      linetype = "solid",
+      linewidth = lwd$obs
+    ) +
+
+    ggplot2::geom_vline(
+      data = ref_lines,
+      ggplot2::aes(xintercept = .data$CriticalValue, color = "Critical"),
+      linetype = "dashed",
+      linewidth = lwd$crit
+    ) +
+
+    ggplot2::geom_text(
+      data = ref_lines,
+      ggplot2::aes(
+        x = -Inf, y = Inf,
+        label = paste0("Obs: ", round(.data$Observed, 3),
+                       "\nCV: ", round(.data$CriticalValue, 3))
+      ),
+      hjust = -0.1, vjust = 1.5, size = 3,
+      inherit.aes = FALSE, fontface = "italic"
+    ) +
+
+    ggplot2::facet_wrap(~Statistic, scales = "free", ncol = 2) +
+
+    ggplot2::scale_color_manual(
+      name = NULL,
+      values = c("Observed" = colors$obs, "Critical" = colors$crit),
+      labels = c(
+        "Observed" = "Observed Statistic",
+        "Critical" = paste0(scales::percent(conf_level), " Bootstrap CV")
+      )
+    ) +
+
+    ggplot2::labs(
+      title = title,
+      subtitle = paste("H0: No Cointegration | Replications:", nrow(boot_df)),
+      x = "Statistic Value",
+      y = "Kernel Density"
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      legend.position = "bottom",
+      strip.background = ggplot2::element_rect(fill = "grey95", color = "grey80"),
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+    )
+
+  if (!show_grid) {
+    p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_blank())
+  }
+
+  return(p)
+}
+
+#' Print Method for westerlund_test
+#' @param x An object of class \code{westerlund_test}.
+#' @param ... Unused.
+#' @method print westerlund_test
+#' @export
+print.westerlund_test <- function(x, ...) {
+  cat("\n--- Westerlund (2007) Panel Cointegration Test ---\n")
+  cat("Observed Statistics:\n")
+  print(unlist(x$test_stats))
+
+  if (!is.null(x$bootstrap_distributions)) {
+    cat(paste0("\nBootstrap Replications: ", nrow(x$bootstrap_distributions), "\n"))
+  }
+
+  cat("\nUse plot(x) to visualize distributions and critical values.\n")
+  invisible(x)
+}
+
+#' Summary Method for Westerlund Test
+#' @param object An object of class 'westerlund_test'
+#' @param ... Additional arguments
+#' @export
+summary.westerlund_test <- function(object, ...) {
+
+  # Helper to find stats regardless of case (gt vs Gt)
+  get_stat <- function(name) {
+    idx <- grep(paste0("^", name, "$"), names(object$test_stats), ignore.case = TRUE)
+    if (length(idx) > 0) return(object$test_stats[[idx]]) else return(NA)
+  }
+
+  # Construct the stats table dynamically
+  stats_table <- data.frame(
+    Statistic = c("Gt", "Ga", "Pt", "Pa"),
+    Value = c(get_stat("gt"), get_stat("ga"), get_stat("pt"), get_stat("pa")),
+    Z_score = c(get_stat("gt_z"), get_stat("ga_z"), get_stat("pt_z"), get_stat("pa_z")),
+    P_val_asymp = c(get_stat("gt_pval"), get_stat("ga_pval"),
+                    get_stat("pt_pval"), get_stat("pa_pval")),
+    stringsAsFactors = FALSE
+  )
+
+  # Add bootstrap p-values if they exist
+  if (!is.null(object$boot_pvals)) {
+    # Match boot p-values by looking for names containing the stat name
+    bp <- unlist(object$boot_pvals)
+    stats_table$P_val_boot <- sapply(c("gt", "ga", "pt", "pa"), function(n) {
+      match_idx <- grep(n, names(bp), ignore.case = TRUE)
+      if (length(match_idx) > 0) bp[match_idx[1]] else NA
+    })
+  }
+
+  out <- list(
+    stats_table = stats_table,
+    settings = object$settings,
+    mg_results = object$mg_results,
+    n_units = if (!is.null(object$indiv_data)) length(object$indiv_data) else NA
+  )
+
+  class(out) <- "summary.westerlund_test"
+  return(out)
+}
+
+#' Print Summary Method
+#' @param x An object of class 'summary.westerlund_test'
+#' @param ... Additional arguments
+#' @rdname summary.westerlund_test
+#' @method print summary.westerlund_test
+#' @export
+print.summary.westerlund_test <- function(x, ...) {
+  cat("\n======================================================\n")
+  cat("  Westerlund (2007) Panel Cointegration Test Summary  \n")
+  cat("======================================================\n")
+
+  cat(paste0("\nUnits: ", x$n_units, " | Time Periods: ", x$settings$T, "\n"))
+  cat(paste0("Deterministic terms: ",
+             if(x$settings$constant) "Constant" else "",
+             if(x$settings$trend) " & Trend" else "", "\n"))
+  cat(paste0("Lag/Lead selection: ", x$settings$selection_method, "\n"))
+
+  cat("\nTest Statistics:\n")
+  # Use print.data.frame to show the table nicely
+  print(x$stats_table, row.names = FALSE, digits = 3)
+
+  cat("\nMean Group (MG) Estimates:\n")
+  print(x$mg_results, row.names = FALSE, digits = 3)
+
+  cat("\nNote: H0 = No Cointegration. Rejection suggests error correction exists.\n")
+  cat("======================================================\n")
+  invisible(x)
 }

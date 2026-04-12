@@ -85,7 +85,7 @@ asymptotic (left-tail) p-values. If \code{bootstrap > 0},
 it additionally produces bootstrap p-values for the raw statistics.
 }
 \value{
-A list containing the following components:
+An object of class \code{westerlund_test}. This is a list containing the following components:
 \itemize{
   \item \code{test_stats}: A numeric vector containing:
     \itemize{

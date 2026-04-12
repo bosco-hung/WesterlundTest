@@ -269,7 +269,7 @@ res_plain <- westerlund_test(
   constant = TRUE, lags = 1, leads = 0,
   verbose = FALSE
 )
-print(res_plain$test_stats)
+print(res_plain)
 
 # 3. Run Bootstrap Test with automatic lag selection
 # Note: bootstrap replications are kept low for example purposes
@@ -281,7 +281,7 @@ res_boot <- westerlund_test(
 )
 
 # 4. Visualize the Bootstrap Results
-p <- plot_westerlund_bootstrap(res_boot)
+p <- plot(res_boot)
 
 print(p)
 ```

@@ -124,6 +124,8 @@ A nested list containing:
   \item \code{results_df}: A summary \code{data.frame} containing all unit-level results in vectorized format.
   \item \code{settings}: A list of routine metadata:
     \itemize{
+      \item \code{constant}: Logical indicating if a constant was included.
+      \item \code{trend}: Logical indicating if a trend was included.
       \item \code{meanlag}, \code{meanlead}: Integer averages of the selected unit lags/leads.
       \item \code{realmeanlag}, \code{realmeanlead}: Numeric averages of the selected unit lags/leads.
       \item \code{auto}: Logical; \code{TRUE} if automatic selection (ranges) was used.
