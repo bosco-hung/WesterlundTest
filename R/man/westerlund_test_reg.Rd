@@ -1,69 +1,39 @@
 \name{westerlund_test_reg}
 \alias{westerlund_test_reg}
 \title{Formatted Coefficient Table for Westerlund Test Reporting}
+\description{
+Builds a Stata-style coefficient table using either Z inference or t inference.
+Mean-group reporting uses Z inference, while individual OLS ECM output uses t
+inference with residual degrees of freedom.
+}
 \usage{
-westerlund_test_reg(b, V, verbose = FALSE)
+westerlund_test_reg(
+  b,
+  V,
+  verbose = FALSE,
+  distribution = c("z", "t"),
+  df = NULL
+)
 }
 \arguments{
-\item{b}{A named numeric vector of coefficients.}
-
-\item{V}{A numeric variance-covariance matrix corresponding to \code{b}.}
-
-\item{verbose}{Logical. If \code{TRUE}, prints additional output.}
-}
-\value{
-This function returns a numeric matrix with rows corresponding to the
-coefficients in \code{b} and columns for "Coef.", "Std. Err.", "z", "P>|z|",
-and the 95\% confidence interval bounds.
-}
-\description{
-Internal helper that calculates standard errors, z-statistics, p-values, and
-confidence intervals for a given coefficient vector and covariance matrix,
-then prints a Stata-style regression table.
+\item{b}{Named numeric coefficient vector.}
+\item{V}{Variance-covariance matrix corresponding to \code{b}.}
+\item{verbose}{Logical. Print the coefficient table.}
+\item{distribution}{Either \code{"z"} or \code{"t"}.}
+\item{df}{Positive residual degrees of freedom, required for \code{distribution="t"}.}
 }
 \details{
-\strong{Calculation Logic.}
-The function replicates the behavior of Stata's \code{ereturn post} when no
-degrees of freedom are specified, using the standard normal distribution (Z)
-for all inference:
-
-\itemize{
-  \item \strong{Standard Errors:} Derived as the square root of the diagonal of \code{V}.
-  \item \strong{z-statistics:} Calculated as \eqn{z = \hat{\beta} / SE(\hat{\beta})}.
-  \item \strong{P-values:} Two-tailed probabilities from the standard normal distribution.
-  \item \strong{Confidence Intervals:} Calculated as \eqn{\hat{\beta} \pm 1.96 \times SE(\hat{\beta})}.
+Standard errors are the square roots of \code{diag(V)}. The reported statistic is
+coefficient divided by standard error. Two-sided p-values and 95 percent
+confidence intervals are computed from either the standard normal or Student t
+distribution according to \code{distribution}.
 }
-
-\strong{Formatting.}
-The table is printed using \code{stats::printCoefmat()} to ensure clean
-alignment and decimal consistency. It includes columns for the Coefficient,
-Standard Error, z-statistic, P-value, and the 95\% Confidence Interval.
-
-\strong{Intended use.}
-This is an internal utility called by \code{\link{westerlund_test_mg}}. It
-provides a standardized way to report results across different parts of the
-Westerlund cointegration test output.
-}
-\section{Reporting Style}{
-This section describes the alignment with econometric software reporting standards.
-
-\subsection{Stata Compatibility}{
-The output format (column headers and statistical assumptions) is designed to
-match the output seen in Stata's \code{xtcpmg} or \code{xtwest} routines. This
-ensures that users transitioning from or comparing results with Stata find the
-output familiar.
-}
-}
+\value{A numeric matrix containing coefficients, standard errors, the selected test statistic, two-sided p-values, and 95 percent confidence intervals.}
 \examples{
-## Define simple coefficient vector and VCV
-b <- c(alpha = -0.20, beta = 1.05)
+b <- c(alpha = -0.2, beta = 1.05)
 V <- diag(c(0.03^2, 0.10^2))
 names(b) <- rownames(V) <- colnames(V) <- c("alpha", "beta")
-
-## Print the formatted table
-westerlund_test_reg(b, V, verbose = TRUE)
+westerlund_test_reg(b, V)
+westerlund_test_reg(b, V, distribution = "t", df = 25)
 }
-\seealso{
-\code{\link{westerlund_test_mg}},
-\code{\link{westerlund_test}}
-}
+\seealso{\code{\link{westerlund_test_mg}}, \code{\link{westerlund_test}}}

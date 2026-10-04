@@ -96,8 +96,8 @@ statistic using a left-tail empirical rule:
 \deqn{
 \hat{p} = \frac{r + 1}{B + 1}, \qquad r = \sum_{b=1}^{B} \mathbb{I}(S_b \le S_{\text{obs}}),
 }
-after dropping non-finite bootstrap draws. This is a common finite-sample
-correction used in Stata-style bootstrap code.
+after dropping non-finite bootstrap draws. This finite-sample correction is an
+intentional feature of this R implementation.
 
 \strong{Return values.}
 In addition to printing, the function returns a list containing the raw

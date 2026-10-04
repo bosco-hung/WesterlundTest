@@ -1,4 +1,15 @@
-.Rproj.user
+# macOS
+.DS_Store
+
+# R / RStudio
+.Rproj.user/
 .Rhistory
 .RData
 .Ruserdata
+
+# Python
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.py[cod]

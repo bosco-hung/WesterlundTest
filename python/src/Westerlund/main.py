@@ -57,8 +57,8 @@ class WesterlundTest:
             Whether to include an intercept in the cointegrating relationship. 
             Defaults to False.
         trend : bool, optional
-            Whether to include a linear time trend. If True, 'constant' is 
-            automatically treated as True. Defaults to False.
+            Whether to include a linear time trend. If True, `constant=True` is
+            required. Defaults to False.
         aic : bool, optional
             Whether to use Akaike Information Criterion for lag/lead selection. If
             False, uses Bayesian Information Criterion. Defaults to True.
@@ -72,7 +72,8 @@ class WesterlundTest:
         indiv_ecm : bool, optional
             Whether to store unit-specific ECM regression results.
         seed : int, optional
-            Random seed for the bootstrap procedure to ensure reproducibility. 
+            Random seed for the bootstrap procedure. If None, the bootstrap RNG is
+            initialized without a fixed seed; pass an integer for reproducibility.
             Defaults to None.
         verbose : bool, optional
             If True, prints detailed messages to the console. Defaults to False.
@@ -93,12 +94,34 @@ class WesterlundTest:
         - When `westerlund=True`, the specification is restricted to at most one 
           regressor and requires at least a constant.
         """
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError("data must be a pandas DataFrame.")
+
         self.raw_data = data.copy()
         self.y_var = y_var
         self.x_vars = x_vars if isinstance(x_vars, list) else [x_vars]
         self.id_var = id_var
         self.time_var = time_var
-        
+
+        if len(self.x_vars) == 0:
+            raise ValueError("At least one regressor must be specified.")
+        if len(self.x_vars) > 6:
+            raise ValueError("No more than 6 covariates can be specified.")
+        required_cols = [self.y_var, self.id_var, self.time_var] + self.x_vars
+        missing_cols = [c for c in required_cols if c not in self.raw_data.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+        if trend and not constant:
+            raise ValueError("If a trend is included, a constant must be included as well.")
+        if westerlund and not constant:
+            raise ValueError("If westerlund=True, at least a constant must be included.")
+        if westerlund and len(self.x_vars) > 1:
+            raise ValueError("If westerlund=True, at most one x-variable may be included.")
+        if not isinstance(lrwindow, (int, np.integer)) or lrwindow < 0:
+            raise ValueError("lrwindow must be a non-negative integer.")
+        if not isinstance(bootstrap, (int, np.integer)):
+            raise ValueError("bootstrap must be an integer.")
+
         # Parse lags/leads
         if isinstance(lags, int):
             self.minlag, self.maxlag = lags, lags
@@ -111,6 +134,11 @@ class WesterlundTest:
             self.minlead, self.maxlead = leads, leads
         else:
             self.minlead, self.maxlead = min(leads), max(leads)
+
+        for nm, val in [("minlag", self.minlag), ("maxlag", self.maxlag),
+                        ("minlead", self.minlead), ("maxlead", self.maxlead)]:
+            if not isinstance(val, (int, np.integer)) or val < 0:
+                raise ValueError(f"{nm} must be a non-negative integer.")
 
         self.lrwindow = lrwindow
         self.constant = constant
@@ -127,6 +155,7 @@ class WesterlundTest:
         self.results_bundle = None
         self.indiv_reg = []
         self.mg_results = None
+        self.mg_tables = None
 
     def _get_ts_map(self, series, time_vec):
         """
@@ -353,6 +382,72 @@ class WesterlundTest:
                         
         return best_l, best_ld
 
+    def _selection_loop_null(self, dy_map, dx_maps, time_vec):
+        """
+        Select the unit-specific lag/lead orders for the bootstrap DGP under H0.
+
+        This mirrors the restricted regression used inside Stata's
+        ``WesterlundBootstrap`` routine.  Unlike the selection regression used by
+        ``WesterlundPlain``, the bootstrap selection excludes lagged levels of y
+        and x and estimates only deterministic terms, lagged differences of y,
+        and current/lagged/led differences of x.
+        """
+        best_ic = np.inf
+        best_l, best_ld = self.maxlag, self.maxlead
+
+        thisti = len(time_vec)
+        dy = self._get_lag_lead(dy_map, time_vec, 0)
+        d_count = int(self.constant) + int(self.trend)
+
+        for l in range(self.maxlag, self.minlag - 1, -1):
+            for ld in range(self.maxlead, self.minlead - 1, -1):
+                rhs = []
+
+                # Stata bootstrap code uses a within-unit observation counter for
+                # the trend (``by id: gen tren = trend*_n``).
+                if self.constant:
+                    rhs.append(np.ones(thisti))
+                if self.trend:
+                    rhs.append(np.arange(1, thisti + 1, dtype=float))
+
+                if l > 0:
+                    for k in range(1, l + 1):
+                        rhs.append(self._get_lag_lead(dy_map, time_vec, k))
+
+                for dx_map in dx_maps:
+                    for k in range(-ld, l + 1):
+                        rhs.append(self._get_lag_lead(dx_map, time_vec, k))
+
+                if not rhs:
+                    continue
+
+                RHS = np.column_stack(rhs)
+                valid = ~np.isnan(dy) & ~np.isnan(RHS).any(axis=1)
+                if valid.sum() <= RHS.shape[1]:
+                    continue
+
+                mod = sm.OLS(dy[valid], RHS[valid]).fit()
+                rss = mod.ssr
+
+                if self.westerlund:
+                    # Exact IC expression used by WesterlundBootstrap.
+                    denom1 = thisti - l - ld - 1
+                    denom2 = thisti - self.maxlag - self.maxlead
+                    if denom1 <= 0 or denom2 <= 0 or rss <= 0:
+                        continue
+                    term1 = np.log(rss / denom1)
+                    penalty = 2 * (l + ld + d_count + 1) / denom2
+                    ic = term1 + penalty
+                else:
+                    # xtwest uses estat ic/AIC here.  Retain the class's BIC
+                    # option for callers that deliberately request it.
+                    ic = mod.aic if self.aic else mod.bic
+
+                if ic < best_ic:
+                    best_ic, best_l, best_ld = ic, l, ld
+
+        return best_l, best_ld
+
     def _get_optimal_model(self, y, X, time_vec, null_model=False, return_full_model=False):
         """
         Coordinates the unit-specific model selection and final Error Correction Model (ECM) 
@@ -430,10 +525,16 @@ class WesterlundTest:
             for j in range(self.nox)
         ]
         
-        # ---------- Phase 1: Selection (Equation 9 restricted) ----------
-        if self.auto and not null_model:
-            # The selection regression does NOT include lagged levels
-            best_lag, best_lead = self._selection_loop(y_map, x_maps, dy_map, dx_maps, time_vec)
+        # ---------- Phase 1: Unit-specific lag/lead selection ----------
+        if self.auto:
+            if null_model:
+                # WesterlundBootstrap selects p_i and q_i from the restricted
+                # H0 regression, which excludes lagged level terms.
+                best_lag, best_lead = self._selection_loop_null(dy_map, dx_maps, time_vec)
+            else:
+                best_lag, best_lead = self._selection_loop(
+                    y_map, x_maps, dy_map, dx_maps, time_vec
+                )
         else:
             best_lag, best_lead = self.maxlag, self.maxlead
 
@@ -664,8 +765,10 @@ class WesterlundTest:
                 tnorm = ti_orig - blag - blead - 1 - kp_stata - 1
 
             indiv_stats.append({
-                'ai': alpha_i, 'seai': se_alpha_i, 'betai': beta_is, 'aonesemi': aonesemi, 'tnorm': tnorm, 'gid': gid,
-                'dy': dy, 'ly': ly, 'sub': gdata, 'tv': tv, 'ti': ti_orig, 'blag': blag, 'blead': blead
+                'ai': alpha_i, 'seai': se_alpha_i, 'betai': beta_is,
+                'aonesemi': aonesemi, 'wysq': wysq, 'wusq': wusq,
+                'tnorm': tnorm, 'gid': gid, 'dy': dy, 'ly': ly,
+                'sub': gdata, 'tv': tv, 'ti': ti_orig, 'blag': blag, 'blead': blead
             })
 
         Gt = np.mean([s['ai'] / s['seai'] for s in indiv_stats])
@@ -685,12 +788,15 @@ class WesterlundTest:
             lr_results_list = []
             for j, xname in enumerate(self.x_vars):
                 all_betas_j = [s['betai'][j] for s in indiv_stats]
+                beta_mean = np.mean(all_betas_j)
+                beta_se = np.std(all_betas_j, ddof=1) / np.sqrt(n_groups)
+                beta_z = beta_mean / beta_se
                 lr_results_list.append({
                     'Variable': xname,
-                    'Coef.': np.mean(all_betas_j),
-                    'Std. Err.': np.std(all_betas_j, ddof=1) / np.sqrt(n_groups),
-                    't': np.mean(all_betas_j) / (np.std(all_betas_j, ddof=1) / np.sqrt(n_groups)),
-                    'P>|t|': 2 * (1 - stats.t.cdf(np.abs(np.mean(all_betas_j) / (np.std(all_betas_j, ddof=1) / np.sqrt(n_groups))), df=n_groups-1))
+                    'Coef.': beta_mean,
+                    'Std. Err.': beta_se,
+                    'z': beta_z,
+                    'P>|z|': 2 * stats.norm.sf(np.abs(beta_z))
                 })
 
             # 3. Call MG Display with the auto flag
@@ -700,8 +806,8 @@ class WesterlundTest:
                     'Variable': 'ec (alpha)',
                     'Coef.': mg_alpha_val,
                     'Std. Err.': se_mg_alpha,
-                    't': mg_alpha_val / se_mg_alpha,
-                    'P>|t|': 2 * (1 - stats.t.cdf(np.abs(mg_alpha_val / se_mg_alpha), df=n_groups-1))
+                    'z': mg_alpha_val / se_mg_alpha,
+                    'P>|z|': 2 * stats.norm.sf(np.abs(mg_alpha_val / se_mg_alpha))
                 },
                 lr_results=lr_results_list,
                 auto=self.auto # Replicates Stata's conditional display
@@ -1028,426 +1134,289 @@ class WesterlundTest:
     
     def _bootstrap_run(self, df):
         """
-        Executes the residual-based bootstrap procedure to obtain the empirical 
-        distribution of the Westerlund test statistics under the null hypothesis 
-        of no cointegration.
+        Execute the residual-based bootstrap used by Stata's ``xtwest``.
 
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            The cleaned and sorted panel data from `_tsset_and_clean`.
+        The bootstrap DGP is estimated under H0 (no lagged level terms).  When
+        lag/lead ranges are supplied, the restricted regression performs its own
+        unit-specific IC selection, as in ``WesterlundBootstrap``.  Resampling is
+        then performed on *actual time clusters* so that a selected time period is
+        carried across all panel units that have a valid null residual at that
+        period.
 
-        Returns
-        -------
-        dict
-            A dictionary containing lists of simulated statistics for "Gt", 
-            "Ga", "Pt", and "Pa", representing the bootstrap distribution.
+        The resampling block mirrors the Stata sequence
 
-        Process
-        -------
-        **Phase 1: Metadata Extraction and Null-Model Estimation**
-        For each cross-sectional unit:
-        1.  Estimates the ECM under the null hypothesis ($H_0: \alpha_i = 0$) 
-            using `_get_optimal_model(null_model=True)`.
-        2.  Extracts and centers the residuals ($e$) and the first-differences 
-            of the regressors ($\Delta X$).
-        3.  Stores the short-run autoregressive coefficients ($\phi$) and 
-            dynamic regressor coefficients ($bLdx, bFdx$).
+            expandcl 2, cluster(id)
+            bsample if e < ., cluster(t)
+            ... construct tussent/newtt ...
 
-        **Phase 2: The Bootstrap Loop**
-        For each replication:
-        1.  **Cluster-Bootstrap Time:** Performs a cluster bootstrap on the 
-            time dimension to maintain the contemporaneous correlation between 
-            units.
-        2.  **Cross-Sectional Correlation (The 'Newtt' Shuffle):** Implements 
-            a stable-sort permutation logic (shuffling) that ensures every unit 
-            in the panel is subjected to the same temporal realignment.
-        3.  **Innovation Construction:** Generates bootstrap innovations ($u$) 
-            by combining resampled residuals with the previously estimated 
-            short-run dynamics of $\Delta X$.
-        4.  **AR Recursion and Integration:** - Recursively generates the bootstrap $\Delta y$ series using the 
-              estimated AR coefficients ($\phi$).
-            - Integrates $\Delta y$ and $\Delta X$ (via cumulative sums) to 
-              generate bootstrap levels ($y^*$ and $X^*$).
-        5.  **Re-Estimation:** Runs the full Westerlund test on the newly 
-            simulated panel using `_run_westerlund_plain` and records the 
-            resulting statistics.
-
-        
-
-        Notes
-        -----
-        - **Null Hypothesis Enforcement:** By estimating the model with 
-          `null_model=True`, we ensure that the generated data does not 
-          contain a cointegrating relationship, making it a valid reference 
-          for p-value calculation.
-        - **Reproducibility:** Uses a NumPy `Generator` with a Mersenne-Twister 
-          (MT19937) algorithm to ensure consistent results across runs if a 
-          seed is provided.
+        including the original xtwest ``currlead`` quirk: the lead loop used in
+        the bootstrap reconstruction is controlled by the selected lead of the
+        last panel unit.  Coefficients for leads not selected by a particular unit
+        remain zero.
         """
-        # Ensure seed consistency
-        rng = Generator(MT19937(self.seed if self.seed is not None else 123))
+        rng = Generator(MT19937(self.seed))
         idv, tv = self.id_var, self.time_var
         df = df.sort_values([idv, tv]).reset_index(drop=True)
         all_ids = sorted(df[idv].unique())
-        num_ids = len(all_ids)
-        
-        # ---------- Phase 1: Per-ID Metadata & Stata IC ----------
+
+        # ------------------------------------------------------------------
+        # Phase 1: estimate the restricted (H0) bootstrap DGP by panel unit.
+        # ------------------------------------------------------------------
         meta_map = {}
-        
+        pool_rows = []
+        stata_currlead = self.maxlead
+
         for gid in all_ids:
             g = df[df[idv] == gid].sort_values(tv)
-            y = g[self.y_var].to_numpy()
-            X = g[self.x_vars].to_numpy()
+            y = g[self.y_var].to_numpy(dtype=float)
+            X = g[self.x_vars].to_numpy(dtype=float)
             time_vec = g[tv].to_numpy()
             Ti = len(y)
 
-            # ic = ln(RSS / (Ti - p - q - 1)) + 2*(p + q + constant + trend + 1) / (Ti - maxlag - maxlead)
             model, resid, blag, blead, valid_F, RHS_F, dy_vec = self._get_optimal_model(
                 y, X, time_vec, null_model=True, return_full_model=True
             )
-            
-            # Centering residuals: Stata's 'replace e = e - meane'
+
+            # Stata: by id: egen meane = mean(e); replace e = e - meane
             e_raw = resid.astype(float)
-            valid_indices = np.where(~np.isnan(e_raw))[0]
-            e_mean = np.mean(e_raw[valid_indices])
-            e_centered = e_raw - e_mean 
-            
-            # Centering dX: Stata's 'egen meandx = mean(dx)'
+            valid_e = np.isfinite(e_raw)
+            if not valid_e.any():
+                raise ValueError(f"No valid bootstrap residuals for panel unit {gid}.")
+            e_centered = e_raw - np.nanmean(e_raw)
+
+            # Stata: d.x followed by within-id demeaning.
             dx_full = np.diff(X, axis=0, prepend=np.full((1, self.nox), np.nan))
-            dx_mean = np.nanmean(dx_full, axis=0)
-            cdX_full = dx_full - dx_mean
-            
-            coeffs = model.params
+            cdX_full = dx_full - np.nanmean(dx_full, axis=0)
+
+            # Coefficient order in the restricted regression is
+            # [constant, trend, L1..Lp D.y, Fq..F1/current/L1..Lp D.x].
+            coeffs = np.asarray(model.params, dtype=float)
             c_idx = int(self.constant) + int(self.trend)
-            
-            phi = np.zeros(self.maxlag + 1)
+
+            phi = np.zeros(self.maxlag + 1, dtype=float)
             if blag > 0:
-                phi[1:blag+1] = coeffs[c_idx : c_idx + blag]
+                phi[1:blag + 1] = coeffs[c_idx:c_idx + blag]
                 c_idx += blag
-                
-            bFdx = np.zeros((self.maxlead + 1, self.nox))
-            bLdx = np.zeros((self.maxlag + 1, self.nox))
-            
+
+            bFdx = np.zeros((self.maxlead + 1, self.nox), dtype=float)
+            bLdx = np.zeros((self.maxlag + 1, self.nox), dtype=float)
             for k in range(-blead, blag + 1):
-                block = coeffs[c_idx : c_idx + self.nox]
+                block = coeffs[c_idx:c_idx + self.nox]
                 c_idx += self.nox
                 if k < 0:
                     bFdx[-k, :] = block
                 else:
                     bLdx[k, :] = block
-                        
+
             meta_map[gid] = {
-                "Ti": Ti, "phi": phi, "bFdx": bFdx, "bLdx": bLdx,
-                "e": e_centered, "cdX": cdX_full, "blead": blead, "blag": blag
+                "Ti": Ti,
+                "phi": phi,
+                "bFdx": bFdx,
+                "bLdx": bLdx,
+                "e": e_centered,
+                "cdX": cdX_full,
+                "blead": blead,
+                "blag": blag,
+                "time": time_vec,
             }
 
-        results_dist = {k: [] for k in ["Gt", "Ga", "Pt", "Pa"]}
-        
-        # Available Innovation Pool (where e is not missing)
-        # Stata: bsample if e < ., cluster(t)
-        # We take the indices where the first ID has valid residuals
-        U_indices = valid_indices
-        U_len = len(U_indices)
+            # ``bsample if e < ., cluster(t)`` samples only observations whose
+            # null residual is nonmissing.  Store their actual time labels now.
+            for pos in np.flatnonzero(valid_e):
+                rec = {
+                    idv: gid,
+                    tv: time_vec[pos],
+                    "__e": e_centered[pos],
+                    "__Ti": Ti,
+                }
+                for j in range(self.nox):
+                    rec[f"__cdx{j}"] = cdX_full[pos, j]
+                pool_rows.append(rec)
 
-        # ---------- Phase 2: The Bootstrap Loop ----------
+            # Literal xtwest behavior: after the foreach-id loop, currlead holds
+            # the selected lead of the final panel unit and is subsequently used
+            # to control the bootstrap lead loop for every unit.
+            stata_currlead = blead
+
+        if not pool_rows:
+            raise ValueError("No valid observations are available for bootstrap resampling.")
+
+        eligible_pool = pd.DataFrame(pool_rows)
+
+        # Stata's expandcl 2, cluster(id): two copies of every eligible row are
+        # present when the subsequent time-cluster bootstrap is drawn.  The new
+        # cluster identifier created by expandcl is not used later by xtwest.
+        expanded_pool = pd.concat(
+            [eligible_pool.assign(__expanded=1), eligible_pool.assign(__expanded=2)],
+            ignore_index=True,
+        )
+
+        # bsample ..., cluster(t) draws Nc time clusters by default, where Nc is
+        # the number of distinct eligible time clusters.  Work with positions in
+        # this list so datetime/string/numeric time labels are all handled safely.
+        time_keys = list(eligible_pool[tv].drop_duplicates())
+        if not time_keys:
+            raise ValueError("No eligible time clusters are available for bootstrap resampling.")
+        rows_by_time = {
+            key: expanded_pool.loc[expanded_pool[tv] == key].copy()
+            for key in time_keys
+        }
+
+        results_dist = {k: [] for k in ["Gt", "Ga", "Pt", "Pa"]}
+
+        # ------------------------------------------------------------------
+        # Phase 2: Stata-style time-cluster bootstrap and data reconstruction.
+        # ------------------------------------------------------------------
         for b in range(self.bootstrap):
-            # 1. Cluster-Bootstrap Time: bsample ..., cluster(t)
-            t_draw = rng.choice(U_indices, size=U_len, replace=True)
-            
-            # 2. Replicate 'expandcl 2' logic
-            # Stata duplicates observations to allow for the 'newtt' shuffle
-            pool_expanded = np.repeat(t_draw, 2)
-            
-            # 3. The "Newtt" Key Generation (The Core of Cross-Sectional Correlation)
-            # Stata: by tussent: egen newtt = mean(newttt)
-            newttt = rng.uniform(0, 1, size=len(pool_expanded))
-            
-            # Stable sort to get the permutation
-            perm = np.argsort(newttt, kind="mergesort")
-            shuffled_t_idx = pool_expanded[perm]
-            
+            # Equivalent sampling unit to: bsample if e < ., cluster(t)
+            draw_pos = rng.choice(len(time_keys), size=len(time_keys), replace=True)
+            sampled_parts = [rows_by_time[time_keys[i]] for i in draw_pos]
+            sampled = pd.concat(sampled_parts, ignore_index=True)
+
+            # Stata: gen newttt = ceil(uniform()*(ti-maxlag-maxlead-1))
+            upper = (
+                sampled["__Ti"].to_numpy(dtype=int)
+                - self.maxlag
+                - self.maxlead
+                - 1
+            )
+            if np.any(upper <= 0):
+                raise ValueError("Insufficient observations for xtwest bootstrap shuffle.")
+            sampled["__newttt"] = np.ceil(rng.random(len(sampled)) * upper).astype(int)
+
+            # sort id, stable; by id: gen tussent = _n
+            sampled["__stable0"] = np.arange(len(sampled))
+            sampled = sampled.sort_values([idv, "__stable0"], kind="mergesort").reset_index(drop=True)
+            sampled["__tussent"] = sampled.groupby(idv, sort=False).cumcount() + 1
+
+            # sort tussent, stable; by tussent: egen newtt = mean(newttt)
+            sampled["__stable1"] = np.arange(len(sampled))
+            sampled = sampled.sort_values(
+                ["__tussent", "__stable1"], kind="mergesort"
+            ).reset_index(drop=True)
+            sampled["__newtt"] = sampled.groupby("__tussent", sort=False)["__newttt"].transform("mean")
+
+            # sort id newtt, stable.  __stable2 explicitly preserves the order
+            # established by the preceding stable sort when newtt ties occur.
+            sampled["__stable2"] = np.arange(len(sampled))
+            sampled = sampled.sort_values(
+                [idv, "__newtt", "__stable2"], kind="mergesort"
+            ).reset_index(drop=True)
+
             boot_data_list = []
+
             for gid in all_ids:
                 meta = meta_map[gid]
-                # Stata: keep if _n <= ti + maxlag + maxlead + 2
                 required_len = int(meta["Ti"] + self.maxlag + self.maxlead + 2)
-                idx = shuffled_t_idx[:required_len]
-                
-                e_b = meta["e"][idx]
-                cdX_b = meta["cdX"][idx, :]
-                
-                # 1. Start with residuals (contains NaNs from support/truncation)
+
+                # Stata: by id: keep if _n <= ti + maxlag + maxlead + 2
+                sg = sampled.loc[sampled[idv] == gid].head(required_len).copy()
+                if sg.empty:
+                    raise ValueError(
+                        f"Bootstrap replication {b + 1} contains no sampled rows for panel unit {gid}."
+                    )
+                sg["__newt"] = np.arange(1, len(sg) + 1)
+
+                e_b = sg["__e"].to_numpy(dtype=float)
+                cdX_b = np.column_stack([
+                    sg[f"__cdx{j}"].to_numpy(dtype=float)
+                    for j in range(self.nox)
+                ])
+
+                # -------------------------- e -> u --------------------------
+                # Stata first zeroes missing u after blanking the first maxlag
+                # observations, then adds all lag terms up to maxlag.
                 u = e_b.copy()
-                
-                # 2. Accumulate components (NaNs will propagate)
-                for k in range(0, meta["blag"] + 1):
+                if self.maxlag > 0:
+                    u[:self.maxlag] = np.nan
+                u = np.nan_to_num(u, nan=0.0)
+
+                # Stata loops 0/maxlag globally.  Coefficients outside a unit's
+                # selected lag are zero, matching the pre-bootstrap fill step.
+                for k in range(0, self.maxlag + 1):
                     Lk = self._roll_nan(cdX_b, k)
-                    # Note: (Lk * beta) will be NaN if Lk is NaN
                     u += (Lk * meta["bLdx"][k, :]).sum(axis=1)
-                
-                if meta["blead"] > 0:
-                    for k in range(1, meta["blead"] + 1):
+
+                # Literal currlead quirk from xtwest: use the final unit's
+                # selected lead as the global upper limit.  Unit-specific unused
+                # lead coefficients are already zero in bFdx.
+                if stata_currlead > 0:
+                    for k in range(1, stata_currlead + 1):
                         Fk = self._roll_nan(cdX_b, -k)
                         u += (Fk * meta["bFdx"][k, :]).sum(axis=1)
-                    
-                # 3. Apply Stata truncation: replace u = . if _n < maxlag + 1
-                u[:self.maxlag] = np.nan
-                
-                # 4. Convert to zero for the recursion
-                u = np.nan_to_num(u, nan=0.0)
-                    
-                # --- Recursion dy (Stata: command string loop) ---
-                dy = np.zeros(len(u))
+
+                # ------------------------- u -> dy --------------------------
+                # Stata turns any missing u into zero when dy is initialized.
+                u_for_dy = np.nan_to_num(u, nan=0.0)
+                dy = np.zeros(len(u_for_dy), dtype=float)
                 phi = meta["phi"]
                 for t in range(self.maxlag, len(dy)):
                     ar_term = 0.0
                     for k in range(1, self.maxlag + 1):
-                        ar_term += dy[t-k] * phi[k]
-                    dy[t] = u[t] + ar_term
-                
-                # --- Integration to Levels (Stata: sum) ---
+                        ar_term += dy[t - k] * phi[k]
+                    dy[t] = u_for_dy[t] + ar_term
+
+                # Stata subsequently sets the first maxlag dy values missing.
+                # For cumulative sums, treating them as zero gives the same
+                # running total before those boundary observations are masked.
+                if self.maxlag > 0:
+                    dy[:self.maxlag] = 0.0
+
+                # -------------------- integrate to levels -------------------
                 booty = np.cumsum(dy)
                 bootx = np.cumsum(np.nan_to_num(cdX_b, nan=0.0), axis=0)
-                
-                # Masking based on Stata's _n constraints
+
                 mask = np.ones(len(booty), dtype=bool)
                 mask[:self.maxlag] = False
                 mask[int(meta["Ti"] + self.maxlag):] = False
-                
+
                 df_b = pd.DataFrame({
                     idv: gid,
-                    tv: np.arange(1, len(booty) + 1),
-                    self.y_var: np.where(mask, booty, np.nan)
+                    tv: sg["__newt"].to_numpy(),
+                    self.y_var: np.where(mask, booty, np.nan),
                 })
                 for j, xname in enumerate(self.x_vars):
                     df_b[xname] = np.where(mask, bootx[:, j], np.nan)
-                
-                boot_data_list.append(df_b.dropna(subset=[self.y_var]))
 
-            # Calculate statistics for this replication
-            boot_panel = pd.concat(boot_data_list).reset_index(drop=True)
+                # _run_westerlund_plain expects its input already cleaned.  The
+                # Stata routine keeps boundary rows but marks them out because
+                # booty/bootx are missing; dropping them here preserves the same
+                # usable time support while retaining the generated newt labels.
+                boot_data_list.append(
+                    df_b.dropna(subset=[self.y_var] + self.x_vars)
+                )
+
+            boot_panel = pd.concat(boot_data_list, ignore_index=True)
             stats_b, indiv_stats_b = self._run_westerlund_plain(boot_panel)
             for k in results_dist:
                 results_dist[k].append(stats_b[k])
-                    
+
         return results_dist
 
-        
-    def run(self):
-        """
-        Executes the full Westerlund (2007) ECM-based panel cointegration testing 
-        workflow, including data cleaning, primary estimation, optional bootstrapping, 
-        and results aggregation.
-
-        This is the primary user-facing method. It coordinates the transition from 
-        raw data to standardized test statistics and robust p-values by orchestrating 
-        the internal estimation and simulation engines.
-
-        Returns
-        -------
-        dict
-            A comprehensive results bundle containing:
-            - **test_stats**: A dictionary of the four raw observed statistics (Gt, Ga, Pt, Pa).
-            - **boot_pvals**: Empirical p-values derived from the bootstrap distribution (if enabled).
-            - **boot_distributions**: The full set of simulated statistics for each replication.
-            - **unit_data**: A pandas DataFrame containing unit-specific estimates (alpha, beta, lags, leads).
-            - **mean_group**: Aggregated coefficients for the long-run relationship and speed of adjustment.
-            - **metadata**: Information on group counts, average observations, and model specifications.
-
-        Process
-        -------
-        **1. Data Preparation:**
-        Calls `_tsset_and_clean` to enforce time-series continuity and verify that 
-        every cross-sectional unit has sufficient observations to support the 
-        requested lag/lead structure.
-
-        **2. Primary Estimation:**
-        Executes `_run_westerlund_plain` to calculate the observed statistics. 
-        This step estimates unit-specific Error Correction Models (ECMs) to derive 
-        Mean-Group statistics and performs partialling-out regressions for the 
-        pooled Panel statistics.
-
-        **3. Bootstrap Inference (Optional):**
-        If `bootstrap > 0`, the method triggers `_bootstrap_run`. It then 
-        calculates "robust" p-values by comparing the observed statistics 
-        against the simulated null distribution using the finite-sample correction:
-        $$p = \frac{r + 1}{B + 1}$$
-        where $r$ is the number of bootstrap replicates less than or equal to the 
-        observed statistic, and $B$ is the number of valid replications.
-
-        
-
-        **4. Results Bundling:**
-        Extracts and organizes granular unit-level data into a structured 
-        format. This includes calculating the Mean-Group $\beta$ coefficients 
-        which represent the average long-run equilibrium relationship across the panel.
-
-        **5. Reporting:**
-        Calls `_display_final` to print the formatted test results, standardized 
-        Z-scores, and p-values to the console, following the standard output 
-        conventions of econometric software.
-
-        Notes
-        -----
-        - The method automatically handles the calculation of the "effective" 
-          sample size and bandwidth parameters used in the standardization process.
-        - By returning the `results_bundle`, it allows for further programmatic 
-          analysis, such as plotting the bootstrap distributions or conducting 
-          post-estimation hypothesis tests on the $\beta$ coefficients.
-        """
-        # 1. Primary Estimation
-        df = self._tsset_and_clean()
-        # Ensure _run_westerlund_plain returns both stats AND indiv_stats
-        main_stats, indiv_data = self._run_westerlund_plain(df, is_boot=False)
-        
-        # 2. Extract Unit-Level Data into a DataFrame
-        # This captures alpha_i, beta_i, specific lags, leads, and tnorm for every group
-        unit_results = pd.DataFrame([{
-            'id': s['gid'],
-            'alpha_i': s['ai'],
-            'se_alpha_i': s['seai'],
-            'beta_i': s['betai'], # List of betas for x_vars
-            'lag': s['blag'],
-            'lead': s['blead'],
-            'tnorm': s['tnorm'],
-            'obs': s['ti']
-        } for s in indiv_data])
-
-        # 3. Process Bootstrap if requested
-        boot_dist = {}
-        boot_pvals = {}
-        if self.bootstrap > 0:
-            if self.verbose:
-                print(f"Bootstrapping {self.bootstrap} replications...")
-            boot_dist = self._bootstrap_run(df) # Returns {Gt: [...], Ga: [...], ...}
-            
-            for k in ["Gt", "Ga", "Pt", "Pa"]:
-                obs = main_stats[k]
-                boots = np.array(boot_dist[k])
-                boots = boots[np.isfinite(boots)]
-                B_valid = boots.size
-                if B_valid == 0:
-                    boot_pvals[k] = np.nan
-                else:
-                    r = np.sum(boots <= obs)
-                    boot_pvals[k] = (r + 1) / (B_valid + 1)
-
-        # 4. Bundle Everything for further processing
-        # We calculate MG coefficients directly from the unit_results DataFrame
-        all_betas = np.array(unit_results['beta_i'].tolist())
-        
-        self.results_bundle = {
-            'test_stats': main_stats,
-            'boot_pvals': boot_pvals,
-            'boot_distributions': boot_dist,
-            'unit_data': unit_results,
-            'mean_group': {
-                'mg_alpha': unit_results['alpha_i'].mean(),
-                'mg_betas': dict(zip(self.x_vars, all_betas.mean(axis=0)))
-            },
-            'metadata': {
-                'bandwidth': self.lrwindow,
-                'n_groups': len(unit_results),
-                'avg_obs': unit_results['obs'].mean(),
-                'model_type': 'constant' if self.constant and not self.trend else 'trend' if self.trend else 'none'
-            },
-            'mg_results': self.mg_results,
-            'indiv_reg': self.indiv_reg
-        }
-
-        # 5. Output to Console
-        if self.verbose:
-            self._display_final(main_stats, boot_pvals)
-        
-        return self.results_bundle
-
-    def _display_final(self, results, boot_pvals):
-        """
-        Calculates standardized Z-scores and formats the final results table for the 
-        Westerlund ECM panel cointegration tests.
-
-        This method performs the final statistical inference by comparing raw 
-        test statistics against asymptotic moments. It generates a comprehensive 
-        console output that includes raw values, Z-scores, asymptotic p-values, 
-        and robust bootstrap p-values (if available).
-
-        Parameters
-        ----------
-        results : dict
-            A dictionary containing the raw values of the four test statistics: 
-            'Gt', 'Ga', 'Pt', and 'Pa'.
-        boot_pvals : dict or None
-            A dictionary containing the empirical p-values calculated from the 
-            bootstrap distribution. If None or empty, the robust p-value column 
-            will display as "-".
-
-        Process
-        -------
-        **1. Deterministic and Covariate Mapping:**
-        Determines the appropriate index for the asymptotic moments table based on:
-        - `ridx`: The deterministic specification (0: None, 1: Constant, 2: Trend).
-        - `cidx`: The number of regressors (capped at 6 as per standard 
-          Westerlund tables).
-
-        **2. Standardization:**
-        Converts raw statistics to standardized Z-scores using the formula:
-        $$Z = \frac{\sqrt{N}(S - \mu)}{\sqrt{\sigma^2}}$$
-        The mean ($\mu$) and variance ($\sigma^2$) are retrieved from either:
-        - **Lookup Tables:** Hard-coded asymptotic moments indexed by 
-          deterministic case and covariate count.
-        - **Westerlund Constants:** Specific constants used when the 
-          `westerlund` flag is active, varying by trend inclusion.
-
-        **3. P-value Calculation:**
-        - **Asymptotic:** Calculated as the left-tail probability from a 
-          standard normal distribution ($\Phi(Z)$).
-        - **Robust:** Retrieved from the `boot_pvals` dictionary.
-
-        
-
-        **4. Formatted Output:**
-        Prints a Stata-style summary header including:
-        - Series names and group counts ($N$).
-        - Lag, lead, and bandwidth specifications.
-        - A structured table comparing all four statistics side-by-side.
-
-        Notes
-        -----
-        - The lookup moments provided in the code are derived from the 
-          simulations in Westerlund (2007).
-        - Rejection of the null hypothesis (no cointegration) occurs for 
-          large negative Z-scores or small p-values (typically $< 0.05$).
-        """
+    def _asymptotic_inference(self, results):
+        """Return standardized Z-scores and asymptotic left-tail p-values."""
         ridx = 0
-        if self.constant and not self.trend: ridx = 1
-        if self.constant and self.trend: ridx = 2
-        cidx = min(self.nox - 1, 5) 
-        
+        if self.constant and not self.trend:
+            ridx = 1
+        if self.constant and self.trend:
+            ridx = 2
+        cidx = self.nox - 1
+
         moments = {
-            'gt': {'mean': np.array([[-0.976,-1.382,-1.709,-1.979,-2.199,-2.426],[-1.778,-2.035,-2.233,-2.445,-2.646,-2.836],[-2.366,-2.528,-2.704,-2.864,-3.015,-3.171]]),
-                   'var':  np.array([[1.082,1.098,1.049,1.058,1.035,1.041],[0.807,0.848,0.889,0.912,0.908,0.924],[0.660,0.707,0.759,0.823,0.848,0.860]])},
-            'ga': {'mean': np.array([[-3.802,-5.824,-7.811,-9.879,-11.724,-13.858],[-7.142,-9.125,-10.967,-12.956,-14.975,-17.067],[-12.012,-13.632,-15.526,-17.365,-19.253,-21.248]]),
-                   'var':  np.array([[20.687,29.902,39.011,50.574,58.960,69.597],[29.634,39.343,49.488,58.704,67.950,79.109],[46.242,53.743,64.559,74.740,84.799,94.002]])},
-            'pt': {'mean': np.array([[-0.511,-0.937,-1.317,-1.617,-1.882,-2.126],[-1.448,-1.713,-1.921,-2.148,-2.373,-2.577],[-2.112,-2.288,-2.463,-2.628,-2.786,-2.954]]),
-                   'var':  np.array([[1.362,1.766,1.718,1.605,1.494,1.424],[0.989,1.066,1.117,1.174,1.168,1.159],[0.765,0.814,0.886,0.999,0.992,0.990]])},
-            'pa': {'mean': np.array([[-1.026,-2.499,-4.270,-6.114,-8.032,-10.007],[-4.230,-5.865,-7.460,-9.306,-11.315,-13.318],[-8.933,-10.487,-12.167,-13.889,-15.682,-17.652]]),
-                   'var':  np.array([[8.383,24.022,39.883,53.452,63.241,76.676],[19.709,31.264,42.998,57.484,69.437,81.038],[37.595,45.689,57.999,74.126,81.393,91.239]])}
+            'gt': {'mean': np.array([[-0.9763,-1.3816,-1.7093,-1.9789,-2.1985,-2.4262],[-1.7776,-2.0349,-2.2332,-2.4453,-2.6462,-2.8358],[-2.3664,-2.5284,-2.7040,-2.8639,-3.0146,-3.1710]]),
+                   'var':  np.array([[1.0823,1.0981,1.0489,1.0576,1.0351,1.0409],[0.8071,0.8481,0.8886,0.9119,0.9083,0.9236],[0.6603,0.7070,0.7586,0.8228,0.8477,0.8599]])},
+            'ga': {'mean': np.array([[-3.8022,-5.8239,-7.8108,-9.8791,-11.7239,-13.8581],[-7.1423,-9.1249,-10.9667,-12.9561,-14.9752,-17.0673],[-12.0116,-13.6324,-15.5262,-17.3648,-19.2533,-21.2479]]),
+                   'var':  np.array([[20.6868,29.9016,39.0109,50.5741,58.9595,69.5967],[29.6336,39.3428,49.4880,58.7035,67.9499,79.1093],[46.2420,53.7428,64.5591,74.7403,84.7990,94.0024]])},
+            'pt': {'mean': np.array([[-0.5105,-0.9370,-1.3169,-1.6167,-1.8815,-2.1256],[-1.4476,-1.7131,-1.9206,-2.1484,-2.3730,-2.5765],[-2.1124,-2.2876,-2.4633,-2.6275,-2.7858,-2.9537]]),
+                   'var':  np.array([[1.3624,1.7657,1.7177,1.6051,1.4935,1.4244],[0.9885,1.0663,1.1168,1.1735,1.1684,1.1589],[0.7649,0.8137,0.8857,0.9985,0.9918,0.9898]])},
+            'pa': {'mean': np.array([[-1.0263,-2.4988,-4.2699,-6.1141,-8.0317,-10.0074],[-4.2303,-5.8650,-7.4599,-9.3057,-11.3152,-13.3180],[-8.9326,-10.4874,-12.1672,-13.8889,-15.6815,-17.6515]]),
+                   'var':  np.array([[8.3827,24.0223,39.8827,53.4518,63.2406,76.6757],[19.7090,31.2637,42.9975,57.4844,69.4374,81.0384],[37.5948,45.6890,57.9985,74.1258,81.3934,91.2392]])}
         }
-
-        N = len(self.raw_data[self.id_var].unique())
+        required = [self.y_var] + self.x_vars + [self.id_var, self.time_var]
+        valid_rows = self.raw_data[required].notna().all(axis=1)
+        N = self.raw_data.loc[valid_rows, self.id_var].nunique()
         sqrt_N = np.sqrt(N)
-        
-        if self.verbose:
-            print("\n" + "="*75)
-            print(f"Westerlund ECM Panel Cointegration Tests")
-            print(f"Series: {self.y_var} ~ {', '.join(self.x_vars)}")
-            print(f"N (Groups): {N}")
-            print(f"Lags: {self.minlag}-{self.maxlag} | Leads: {self.minlead}-{self.maxlead} | Window: {self.lrwindow}")
-            print("="*75)
-            print(f"{'Statistic':<10} | {'Value':<10} | {'Z-score':<10} | {'P-value':<10} | {'Robust P':<10}")
-            print("-" * 75)
-
+        z_scores, p_values = {}, {}
         for name in ['Gt', 'Ga', 'Pt', 'Pa']:
             val = results[name]
             k = name.lower()
@@ -1457,20 +1426,176 @@ class WesterlundTest:
                 else:
                     params = {'gt':(-2.356, 0.6450), 'ga':(-11.8978, 44.2471), 'pt':(-2.1128, 0.7371), 'pa':(-8.9536, 35.6802)}
                 mu, var = params[k]
-                z = (val - sqrt_N * mu) / np.sqrt(var) if k=='pt' else (sqrt_N * val - sqrt_N * mu) / np.sqrt(var)
             else:
                 mu = moments[k]['mean'][ridx, cidx]
                 var = moments[k]['var'][ridx, cidx]
-                z = (val - sqrt_N * mu) / np.sqrt(var) if k=='pt' else (sqrt_N * val - sqrt_N * mu) / np.sqrt(var)
-            
-            pval = stats.norm.cdf(z)
-            rob_p = f"{boot_pvals[name]:.3f}" if boot_pvals else "-"
+            z = ((val - sqrt_N * mu) / np.sqrt(var)) if k == 'pt' else ((sqrt_N * val - sqrt_N * mu) / np.sqrt(var))
+            z_scores[name] = float(z)
+            p_values[name] = float(stats.norm.cdf(z))
+        return z_scores, p_values
+
+    def run(self):
+        """Run the Westerlund test and return a feature-complete results bundle."""
+        df = self._tsset_and_clean()
+        main_stats, indiv_data = self._run_westerlund_plain(df, is_boot=False)
+
+        unit_results = pd.DataFrame([{
+            'id': s['gid'],
+            'alpha_i': s['ai'], 'ai': s['ai'],
+            'se_alpha_i': s['seai'], 'seai': s['seai'],
+            'beta_i': s['betai'],
+            'aonesemi': s['aonesemi'], 'wysq': s['wysq'], 'wusq': s['wusq'],
+            'lag': s['blag'], 'lags': s['blag'],
+            'lead': s['blead'], 'leads': s['blead'],
+            'tnorm': s['tnorm'], 'obs': s['ti'], 'ti': s['ti']
+        } for s in indiv_data])
+
+        boot_dist, boot_pvals = {}, {}
+        if self.bootstrap > 0:
             if self.verbose:
-                print(f"{name:<10} | {val:<10.3f} | {z:<10.3f} | {pval:<10.3f} | {rob_p:<10}")
-        
+                print(f"Bootstrapping {self.bootstrap} replications...")
+            boot_dist = self._bootstrap_run(df)
+            for k in ['Gt', 'Ga', 'Pt', 'Pa']:
+                obs = main_stats[k]
+                boots = np.asarray(boot_dist[k], dtype=float)
+                boots = boots[np.isfinite(boots)]
+                if boots.size == 0:
+                    boot_pvals[k] = np.nan
+                else:
+                    r = np.sum(boots <= obs)
+                    boot_pvals[k] = (r + 1) / (boots.size + 1)
+
+        z_scores, asymp_pvals = self._asymptotic_inference(main_stats)
+
+        all_betas = np.asarray(unit_results['beta_i'].tolist(), dtype=float)
+        n_groups = len(unit_results)
+        mg_alpha = float(unit_results['alpha_i'].mean())
+        se_mg_alpha = float(unit_results['alpha_i'].std(ddof=1) / np.sqrt(n_groups)) if n_groups > 1 else np.nan
+        mg_beta_vec = np.mean(all_betas, axis=0)
+        se_mg_beta_vec = (np.std(all_betas, axis=0, ddof=1) / np.sqrt(n_groups)) if n_groups > 1 else np.full(self.nox, np.nan)
+
+        selected_lags = unit_results['lag'].to_numpy(dtype=float)
+        selected_leads = unit_results['lead'].to_numpy(dtype=float)
+        realmeanlag = float(np.mean(selected_lags))
+        realmeanlead = float(np.mean(selected_leads))
+        meanlag = int(realmeanlag)
+        meanlead = int(realmeanlead)
+        selection_method = 'Westerlund IC' if self.westerlund else ('AIC' if self.aic else 'BIC')
+        model_type = 'trend' if self.trend else ('constant' if self.constant else 'none')
+        avg_obs = float(unit_results['obs'].mean())
+
+        settings = {
+            'constant': self.constant, 'trend': self.trend,
+            'minlag': self.minlag, 'maxlag': self.maxlag,
+            'minlead': self.minlead, 'maxlead': self.maxlead,
+            'meanlag': meanlag, 'meanlead': meanlead,
+            'realmeanlag': realmeanlag, 'realmeanlead': realmeanlead,
+            'auto': self.auto, 'selection_method': selection_method,
+            'lrwindow': self.lrwindow, 'bootstrap': self.bootstrap,
+            'seed': self.seed, 'T': avg_obs
+        }
+        metadata = {
+            'bandwidth': self.lrwindow, 'n_groups': n_groups,
+            'avg_obs': avg_obs, 'model_type': model_type,
+            'selection_method': selection_method, 'seed': self.seed
+        }
+
+        self.results_bundle = {
+            'test_stats': main_stats,
+            'z_scores': z_scores,
+            'p_values': asymp_pvals,
+            'boot_pvals': boot_pvals,
+            'boot_distributions': boot_dist,
+            'unit_data': unit_results,
+            'indiv_data': indiv_data,
+            'mean_group': {
+                'mg_alpha': mg_alpha,
+                'se_mg_alpha': se_mg_alpha,
+                'mg_betas': dict(zip(self.x_vars, mg_beta_vec)),
+                'se_mg_betas': dict(zip(self.x_vars, se_mg_beta_vec))
+            },
+            'settings': settings,
+            'metadata': metadata,
+            'mg_results': self.mg_results,
+            'mg_tables': self.mg_tables,
+            'indiv_reg': self.indiv_reg
+        }
+
         if self.verbose:
+            self._display_final(main_stats, boot_pvals, z_scores=z_scores, p_values=asymp_pvals)
+        return self.results_bundle
+
+    def _display_final(self, results, boot_pvals, z_scores=None, p_values=None):
+        """Print the raw, standardized, asymptotic and bootstrap test results."""
+        if z_scores is None or p_values is None:
+            z_scores, p_values = self._asymptotic_inference(results)
+        required = [self.y_var] + self.x_vars + [self.id_var, self.time_var]
+        valid_rows = self.raw_data[required].notna().all(axis=1)
+        N = self.raw_data.loc[valid_rows, self.id_var].nunique()
+        if self.verbose:
+            print("\n" + "="*75)
+            print("Westerlund ECM Panel Cointegration Tests")
+            print(f"Series: {self.y_var} ~ {', '.join(self.x_vars)}")
+            print(f"N (Groups): {N}")
+            print(f"Lags: {self.minlag}-{self.maxlag} | Leads: {self.minlead}-{self.maxlead} | Window: {self.lrwindow}")
             print("="*75)
-    
+            print(f"{'Statistic':<10} | {'Value':<10} | {'Z-score':<10} | {'P-value':<10} | {'Robust P':<10}")
+            print("-"*75)
+            for name in ['Gt', 'Ga', 'Pt', 'Pa']:
+                rob = boot_pvals.get(name, np.nan) if boot_pvals else np.nan
+                rob_txt = f"{rob:.3f}" if np.isfinite(rob) else "-"
+                print(f"{name:<10} | {results[name]:<10.3f} | {z_scores[name]:<10.3f} | {p_values[name]:<10.3f} | {rob_txt:<10}")
+            print("="*75)
+
+    def summary(self, verbose=False):
+        """Return a compact summary analogous to ``summary.westerlund_test`` in R."""
+        if self.results_bundle is None:
+            raise RuntimeError("No results available. Call run() first.")
+        res = self.results_bundle
+        rows = []
+        for name in ['Gt', 'Ga', 'Pt', 'Pa']:
+            row = {
+                'Statistic': name,
+                'Value': res['test_stats'][name],
+                'Z_score': res['z_scores'][name],
+                'P_val_asymp': res['p_values'][name]
+            }
+            if res['boot_pvals']:
+                row['P_val_boot'] = res['boot_pvals'].get(name, np.nan)
+            rows.append(row)
+        stats_table = pd.DataFrame(rows)
+        out = {
+            'stats_table': stats_table,
+            'settings': res['settings'],
+            'mean_group': res['mean_group'],
+            'mg_results': res['mg_results'],
+            'mg_tables': res.get('mg_tables'),
+            'n_units': res['metadata']['n_groups']
+        }
+        if verbose:
+            print("\n" + "="*70)
+            print("Westerlund (2007) Panel Cointegration Test Summary")
+            print("="*70)
+            print(f"Units: {out['n_units']} | Average time periods: {res['settings']['T']:.2f}")
+            print(f"Deterministic terms: {res['metadata']['model_type']}")
+            print(f"Lag/lead selection: {res['settings']['selection_method']}")
+            print("\nTest Statistics:")
+            print(stats_table.to_string(index=False))
+            print("\nMean Group Estimates:")
+            print(pd.Series(res['mean_group']).to_string())
+        return out
+
+    def print_summary(self):
+        """Print and return :meth:`summary`."""
+        return self.summary(verbose=True)
+
+    def __repr__(self):
+        if self.results_bundle is None:
+            return (f"WesterlundTest(y_var={self.y_var!r}, x_vars={self.x_vars!r}, "
+                    f"groups={self.raw_data.dropna(subset=[self.y_var] + self.x_vars + [self.id_var, self.time_var])[self.id_var].nunique()}, bootstrap={self.bootstrap})")
+        tab = self.summary(verbose=False)['stats_table']
+        return "WesterlundTest results\n" + tab.to_string(index=False)
+
     def _reg_display(self, params, bse, tvalues, pvalues, title="Regression Results"):
         """
         Formats and prints a detailed coefficient table for unit-specific regressions.
@@ -1551,8 +1676,7 @@ class WesterlundTest:
         ----------
         mg_results : dict
             A dictionary containing the aggregated statistics for the error 
-            correction coefficient ($\alpha$). Expected keys include 'Variable', 
-            'Coef.', 'Std. Err.', 't', and 'P>|t|'.
+            correction coefficient ($\alpha$). Expected keys include 'Variable', 'Coef.', 'Std. Err.', 'z', and 'P>|z|'.
         lr_results : list of dict
             A list where each element is a dictionary representing a regressor's 
             long-run relationship ($\beta$). This represents the cointegrating vector.
@@ -1600,158 +1724,93 @@ class WesterlundTest:
             
             print("\nEstimated long-run relationship and short run adjustment")
         
-        # This matches the second 'eret disp' in Stata
+        # Store both reporting tables while preserving the historical long-run
+        # DataFrame return value for backwards compatibility.
+        alpha_df = pd.DataFrame([mg_results])
         lr_df = pd.DataFrame(lr_results)
+        self.mg_tables = {'mg_model': alpha_df, 'long_run': lr_df}
 
         if self.verbose:
             print(lr_df.to_string(index=False))
             print("="*60 + "\n")
-        
         return lr_df
     
-    def plot_bootstrap(self, 
-                       title="Westerlund Panel Cointegration Test (Bootstrap)",
-                       save_path=None, 
+    def plot_bootstrap(self,
+                       title="Westerlund Test: Bootstrap Distributions",
+                       conf_level=0.05,
+                       save_path=None,
                        dpi=300,
                        figsize=(12, 10),
-                       colors={'obs': '#D55E00', 'cv': '#0072B2', 'kde': 'grey'},
-                       alpha=0.5):
-        """
-        Visualizes the bootstrap distributions of the Westerlund test statistics using 
-        Kernel Density Estimation (KDE).
+                       colors=None,
+                       lwd=None,
+                       alpha=0.5,
+                       show_grid=True,
+                       show_robust_p=True,
+                       show=True):
+        """Plot bootstrap distributions with configurable critical level and export."""
+        if self.results_bundle is None or not self.results_bundle.get('boot_distributions'):
+            raise RuntimeError("No bootstrap results found. Call run() with bootstrap > 0 first.")
+        if not (0 < conf_level < 1):
+            raise ValueError("conf_level must be between 0 and 1.")
+        colors = colors or {'obs': '#D55E00', 'crit': '#0072B2', 'fill': '#CCCCCC', 'density': '#4D4D4D'}
+        lwd = lwd or {'obs': 2.5, 'crit': 1.5, 'density': 1.5}
+        # Accept the older Python key names as aliases.
+        obs_color = colors.get('obs', '#D55E00')
+        crit_color = colors.get('crit', colors.get('cv', '#0072B2'))
+        density_color = colors.get('density', colors.get('kde', '#4D4D4D'))
+        fill_color = colors.get('fill', density_color)
 
-        This method generates a 2x2 grid of subplots for Gt, Ga, Pt, and Pa. Each plot 
-        compares the simulated distribution under the null hypothesis (no cointegration) 
-        against the observed test statistic. It serves as a diagnostic tool to assess 
-        the significance and stability of the results.
-
-        Parameters
-        ----------
-        title : str, optional
-            The main title of the figure. Defaults to "Westerlund Panel Cointegration 
-            Test (Bootstrap)".
-        save_path : str, optional
-            The filesystem path (e.g., 'path/to/plot.png') where the figure should 
-            be saved. If None, the plot is only displayed in the console/notebook.
-        dpi : int, optional
-            The resolution of the saved image in dots per inch. Defaults to 300.
-        figsize : tuple, optional
-            The width and height of the figure in inches. Defaults to (12, 10).
-        colors : dict, optional
-            A dictionary defining the hex colors for different plot elements:
-            - 'obs': The vertical line for the observed test statistic.
-            - 'cv': The dashed vertical line for the 5% critical value.
-            - 'kde': The color of the density curve and fill area.
-        alpha : float, optional
-            The transparency level (0 to 1) for the KDE shaded fill area. 
-            Defaults to 0.5.
-
-        Process
-        -------
-        1.  **Data Retrieval:** Extracts the bootstrap distributions and observed 
-            statistics from the `results_bundle`. It requires that `.run()` has been 
-            called with a positive bootstrap value.
-        2.  **KDE Calculation:** Uses `scipy.stats.gaussian_kde` to compute the 
-            probability density function for each of the four statistics.
-        3.  **Critical Value Identification:** Calculates the 5th percentile of each 
-            distribution to determine the lower-tail critical value.
-        4.  **Statistical Overlay:** - Draws a solid vertical line for the **Observed Statistic**.
-            - Draws a dashed vertical line for the **5% Critical Value**.
-            - Displays a text box containing the observed value, critical value, 
-              and the calculated robust p-value.
-        5.  **Layout & Export:** Standardizes the formatting with a unified legend 
-            and saves the output to the specified `save_path` if provided.
-
-        
-
-        Interpretation
-        --------------
-        The Westerlund test is a lower-tail test. Cointegration is suggested if the 
-        **Observed Statistic** (solid line) is located to the **LEFT** of the 
-        **Critical Value** (dashed line). In such cases, the robust p-value will 
-        typically be less than 0.05.
-
-        Notes
-        -----
-        - Non-finite (NaN/Inf) bootstrap draws are automatically filtered out 
-          before plotting.
-        - The x-axis range is automatically expanded by one standard deviation 
-          to ensure the tails of the distribution are visible.
-        - This method requires `matplotlib`, `seaborn`, and `scipy` to be installed.
-        """
-        
-        # 1. Check if results exist
-        if not hasattr(self, 'results_bundle') or not self.results_bundle.get('boot_distributions'):
-            print("Error: No bootstrap results found. Please call .run() with bootstrap > 0 first.")
-            return
-
-        # 2. Extract Data from Bundle
         res = self.results_bundle
-        boot_dist = res['boot_distributions']
-        obs_stats = res['test_stats']
-        p_vals = res['boot_pvals']
-        stats_to_plot = ['Gt', 'Ga', 'Pt', 'Pa']
-
-        # 3. Setup Plot
-        sns.set_theme(style="whitegrid")
         fig, axes = plt.subplots(2, 2, figsize=figsize)
         axes = axes.flatten()
-
-        for i, stat in enumerate(stats_to_plot):
+        for i, stat in enumerate(['Gt', 'Ga', 'Pt', 'Pa']):
             ax = axes[i]
-            
-            # Clean data (Pure NumPy)
-            data = np.array(boot_dist[stat])
+            data = np.asarray(res['boot_distributions'][stat], dtype=float)
             data = data[np.isfinite(data)]
-            
-            if len(data) > 1:
-                # --- Manual KDE Logic ---
-                kde = gaussian_kde(data)
-                # Expand range slightly for better visual tail representation
-                x_range = np.linspace(data.min() - np.std(data), data.max() + np.std(data), 200)
-                y_kde = kde(x_range)
-                
-                ax.plot(x_range, y_kde, color=colors.get('kde', 'grey'), lw=1.5, label='Bootstrap H0 Dist.')
-                ax.fill_between(x_range, y_kde, color=colors.get('kde', 'grey'), alpha=alpha)
+            if data.size < 2:
+                ax.set_title(f"Statistic: {stat}")
+                ax.text(0.5, 0.5, "Insufficient finite bootstrap draws", ha='center', va='center', transform=ax.transAxes)
+                continue
+            kde = gaussian_kde(data)
+            sd = np.std(data)
+            x_range = np.linspace(data.min() - sd, data.max() + sd, 200)
+            y_kde = kde(x_range)
+            ax.plot(x_range, y_kde, color=density_color, lw=lwd.get('density', 1.5), label='Bootstrap H0 Dist.')
+            ax.fill_between(x_range, y_kde, color=fill_color, alpha=alpha)
 
-                # Observed Statistic (Red Solid)
-                obs_val = obs_stats[stat]
-                ax.axvline(obs_val, color=colors.get('obs', '#D55E00'), linestyle='-', linewidth=2.5, label='Observed Stat')
+            obs_val = res['test_stats'][stat]
+            cv_val = float(np.quantile(data, conf_level))
+            ax.axvline(obs_val, color=obs_color, linestyle='-', linewidth=lwd.get('obs', 2.5), label='Observed Statistic')
+            ax.axvline(cv_val, color=crit_color, linestyle='--', linewidth=lwd.get('crit', 1.5), label=f'{conf_level:.0%} Bootstrap CV')
+            ann = f"Obs: {obs_val:.3f}\nCV: {cv_val:.3f}"
+            if show_robust_p:
+                p = res['boot_pvals'].get(stat, np.nan) if res['boot_pvals'] else np.nan
+                if np.isfinite(p):
+                    ann += f"\nRobust p: {p:.3f}"
+            ax.text(0.05, 0.95, ann, transform=ax.transAxes, va='top', fontsize=9,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            ax.set_title(f"Statistic: {stat}", fontweight='bold')
+            if show_grid:
+                ax.grid(True, which='major', alpha=0.3)
+            else:
+                ax.grid(False)
 
-                # 5% Critical Value (Blue Dashed)
-                # Westerlund tests are typically lower-tail tests (reject if stat < CV)
-                cv_val = np.percentile(data, 5)
-                ax.axvline(cv_val, color=colors.get('cv', '#0072B2'), linestyle='--', linewidth=1.5, label='5% Critical Value')
-
-                # Display Stats
-                p_val = p_vals.get(stat, np.nan)
-                ax.set_title(f"Statistic: {stat}", fontweight='bold')
-                ax.text(0.05, 0.95, f"Obs: {obs_val:.3f}\nCV: {cv_val:.3f}\nRobust p: {p_val:.3f}", 
-                        transform=ax.transAxes, verticalalignment='top', fontsize=9,
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-
-        # 4. Global Formatting
-        plt.suptitle(title, fontsize=16, fontweight='bold')
-        plt.figtext(0.5, 0.93, "Null Rejected if Observed (solid) is to the LEFT of Critical Value (dashed)", 
-                    ha="center", fontsize=10, color="dimgrey")
-        
-        # Unified Legend
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+        fig.text(0.5, 0.93, "H0: No cointegration | reject when observed statistic is left of the bootstrap critical value",
+                 ha='center', fontsize=10)
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc='lower center', ncol=3, frameon=True)
-        
-        plt.tight_layout(rect=[0, 0.05, 1, 0.92])
-
-        # 5. Save Logic
+        if handles:
+            fig.legend(handles, labels, loc='lower center', ncol=3, frameon=True)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.92])
         if save_path:
-            try:
-                # Create directory if it doesn't exist
-                directory = os.path.dirname(save_path)
-                if directory and not os.path.exists(directory):
-                    os.makedirs(directory)
-                
-                plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
-                print(f"Figure successfully saved to: {save_path}")
-            except Exception as e:
-                print(f"Warning: Could not save figure. Error: {e}")
+            directory = os.path.dirname(save_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        if show:
+            plt.show()
+        return fig
 
-        plt.show()
+    def plot(self, *args, **kwargs):
+        """Plotting interface."""
+        return self.plot_bootstrap(*args, **kwargs)

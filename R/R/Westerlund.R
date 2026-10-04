@@ -24,7 +24,7 @@
 #' @param trend Logical. Include a linear trend in the cointegrating relationship.
 #'   Setting \code{trend=TRUE} requires \code{constant=TRUE}.
 #' @param lags Integer or length-2 integer vector. Fixed lag order or range
-#'   \code{c(min,max)} for the short-run lag length \eqn{p}. This option must be provided.
+#'   \code{c(min,max)} for the short-run lag length \eqn{p}. Defaults to 1.
 #' @param leads Integer or length-2 integer vector, or \code{NULL}. Fixed lead order
 #'   or range \code{c(min,max)} for the short-run lead length \eqn{q}. If \code{NULL},
 #'   defaults to 0.
@@ -33,13 +33,16 @@
 #'   regressor may be specified.
 #' @param aic Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges.
 #'   If \code{FALSE}, uses BIC.
-#' @param bootstrap Integer. If \code{bootstrap > 0}, runs an internal bootstrap
-#'   routine with \code{bootstrap} replications and returns bootstrap p-values
-#'   for the raw statistics. If \code{bootstrap <= 0} (default \code{-1}), no
-#'   bootstrap is performed.
+#' @param bootstrap Integer. If \code{bootstrap > 0}, runs an internal residual-based
+#'   bootstrap with \code{bootstrap} replications. The bootstrap resamples actual
+#'   time clusters across units to preserve contemporaneous cross-sectional dependence,
+#'   retains unit-specific panel lengths, and returns bootstrap p-values for the raw
+#'   statistics. If \code{bootstrap <= 0} (default \code{-1}), no bootstrap is performed.
 #' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
 #' @param lrwindow Integer. Window parameter used for long-run variance estimation
 #'   in internal routines. Default is 2.
+#' @param seed Optional integer random seed used for bootstrap reproducibility. If
+#'   \code{NULL}, the current R random-number state is used without resetting it.
 #' @param verbose Logical. If \code{TRUE}, prints additional information.
 #'
 #' @details
@@ -71,26 +74,27 @@
 #'
 #' \strong{Inference:}
 #' If \code{bootstrap <= 0}, standardized Z-scores and asymptotic (left-tail)
-#' p-values are returned. If \code{bootstrap > 0}, bootstrap p-values for the
-#' \emph{raw} statistics are produced. This is often preferred in finite samples
-#' to account for nuisance parameter sensitivity.
+#' p-values are returned. If \code{bootstrap > 0}, the function additionally
+#' constructs a residual-based null distribution using Stata-aligned time-cluster
+#' resampling and reports bootstrap p-values for the raw statistics. The bootstrap
+#' p-values in this R implementation use the finite-sample correction
+#' \eqn{(r+1)/(B+1)}.
 #'
 #' @return An object of class \code{westerlund_test}. This is a list containing
 #' the following components:
 #' \itemize{
-#'   \item \code{test_stats}: A named numeric vector containing:
-#'     \itemize{
-#'       \item \code{gt, ga, pt, pa}: Raw test statistics.
-#'       \item \code{gt_z, ga_z, pt_z, pa_z}: Standardized Z-scores.
-#'       \item \code{gt_pval, ga_pval, pt_pval, pa_pval}: Asymptotic left-tail p-values.
-#'     }
-#'   \item \code{boot_pvals}: A named list (\code{gt, ga, pt, pa}) of bootstrap p-values,
-#'     calculated only if \code{bootstrap > 0}.
+#'   \item \code{test_stats}: Named raw statistics \code{Gt}, \code{Ga}, \code{Pt}, and \code{Pa}.
+#'   \item \code{z_scores}: Named standardized Z-scores for the four statistics.
+#'   \item \code{p_values}: Named asymptotic left-tail p-values for the four statistics.
+#'   \item \code{boot_pvals}: A named list containing bootstrap p-values under the
+#'     names \code{Gt}, \code{Ga}, \code{Pt}, and \code{Pa}, calculated only if
+#'     \code{bootstrap > 0}.
 #'   \item \code{bootstrap_distributions}: A matrix of dimension \code{[bootstrap x 4]}
-#'     containing the distribution of the four statistics across replications.
-#'   \item \code{unit_data}: A \code{data.frame} containing unit-specific results including
-#'     individual alpha coefficients (\code{ai}), beta estimates (\code{betai}), and
-#'     standard errors.
+#'     containing the bootstrap distributions of \code{Gt}, \code{Ga}, \code{Pt}, and
+#'     \code{Pa} across replications.
+#'   \item \code{unit_data}: A \code{data.frame} containing unit-specific alpha estimates,
+#'     standard errors, beta vectors, selected lags/leads, normalization terms,
+#'     long-run variance components, and observation counts. 
 #'   \item \code{indiv_data}: A list of length equal to the number of cross-sectional units storing unit-specific results.
 #'   \item \code{mean_group}: A list containing:
 #'     \itemize{
@@ -99,8 +103,13 @@
 #'       \item \code{mg_betas}: Vector of Mean Group estimates for the long-run regressors.
 #'       \item \code{se_mg_betas}: Standard errors for the MG betas.
 #'     }
-#'   \item \code{settings}: A list of internal parameters and lag/lead selections used.
-#'   \item \code{mg_results}: A \code{data.frame} summarizing the Mean Group estimation results.
+#'   \item \code{settings}: A list of internal parameters, lag/lead selections,
+#'     selection method, bandwidth, bootstrap count, seed, and average panel length.
+#'   \item \code{metadata}: Compact metadata.
+#'   \item \code{mg_results}: Mean-group reporting tables.
+#'   \item \code{mg_tables}: Alias of the two mean-group reporting tables for
+#'     cross-language consistency.
+#'   \item \code{indiv_reg}: Stored individual ECM tables when requested.
 #' }
 #'
 #' @references
@@ -149,13 +158,14 @@ westerlund_test <- function(data,
                    timevar,
                    constant = FALSE,
                    trend = FALSE,
-                   lags,              # Can be a single integer or a vector c(min, max)
+                   lags = 1,          # Can be a single integer or a vector c(min, max)
                    leads = NULL,      # Can be a single integer or a vector c(min, max)
                    westerlund = FALSE,
                    aic = TRUE,
                    bootstrap = -1,    # Default -1
                    indiv.ecm = FALSE,
                    lrwindow = 2,
+                   seed = NULL,
                    verbose = FALSE) {
 
   # ----------------------------------------------------------------------------
@@ -174,6 +184,12 @@ westerlund_test <- function(data,
   }
 
   if (withtrend && !withconstant) stop("Error: If a trend is included, a constant must be included as well.")
+  if (length(lrwindow) != 1 || !is.finite(lrwindow) || lrwindow < 0 || lrwindow != as.integer(lrwindow))
+    stop("Error: lrwindow must be a non-negative integer.")
+  if (length(bootstrap) != 1 || !is.finite(bootstrap) || bootstrap != as.integer(bootstrap))
+    stop("Error: bootstrap must be an integer.")
+  if (!is.null(seed) && (length(seed) != 1 || !is.finite(seed) || seed != as.integer(seed)))
+    stop("Error: seed must be NULL or a single integer.")
 
   # ----------------------------------------------------------------------------
   # 2. Data Preparation
@@ -202,7 +218,6 @@ westerlund_test <- function(data,
   unique_levels <- unique(data[[idvar]][touse])
   nobs <- length(unique_levels)
 
-  if (missing(lags)) stop("Error: Lags must be provided.")
   minlag <- if(length(lags) > 1) min(lags) else lags[1]
   maxlag <- if(length(lags) > 1) max(lags) else lags[1]
 
@@ -212,6 +227,9 @@ westerlund_test <- function(data,
     maxlead <- if(length(leads) > 1) max(leads) else leads[1]
   }
   auto <- (minlead != maxlead) || (minlag != maxlag)
+  if (minlag < 0 || maxlag < 0 || minlead < 0 || maxlead < 0 ||
+      any(c(minlag, maxlag, minlead, maxlead) != as.integer(c(minlag, maxlag, minlead, maxlead))))
+    stop("Error: lags and leads must be non-negative integers.")
 
   # ----------------------------------------------------------------------------
   # 5. Observation Sufficiency Check
@@ -228,7 +246,7 @@ westerlund_test <- function(data,
 
   if (bootstrap > 0) {
     if(verbose)cat("\nCalculating Westerlund ECM panel cointegration tests\n\n")
-    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, aic, bootstrap, indiv.ecm = FALSE, lrwindow = lrwindow, verbose = verbose)
+    boot_res <- WesterlundBootstrap(data, touse, idvar, timevar, yvar, xvars, constant, trend, lags, leads, westerlund, aic, bootstrap, indiv.ecm = FALSE, lrwindow = lrwindow, seed = seed, verbose = verbose)
     boot_dist <- boot_res$BOOTSTATS
   }
 
@@ -299,11 +317,39 @@ westerlund_test <- function(data,
   # ----------------------------------------------------------------------------
   # 9. Construct Final Bundle
   # ----------------------------------------------------------------------------
+  z_scores <- c(Gt = display_res$gt_z, Ga = display_res$ga_z,
+                Pt = display_res$pt_z, Pa = display_res$pa_z)
+  p_values <- c(Gt = display_res$gt_pval, Ga = display_res$ga_pval,
+                Pt = display_res$pt_pval, Pa = display_res$pa_pval)
+  selection_method <- if (westerlund) "Westerlund IC" else if (aic) "AIC" else "BIC"
+  avg_obs <- mean(as.numeric(numbobs_table))
+  model_type <- if (trend) "trend" else if (constant) "constant" else "none"
+  settings <- c(plain_res$settings, list(
+    minlag = minlag, maxlag = maxlag, minlead = minlead, maxlead = maxlead,
+    selection_method = selection_method, lrwindow = lrwindow,
+    bootstrap = bootstrap, seed = seed, T = avg_obs
+  ))
+  metadata <- list(
+    bandwidth = lrwindow, n_groups = nobs, avg_obs = avg_obs,
+    model_type = model_type, selection_method = selection_method, seed = seed
+  )
+  indiv_reg <- lapply(plain_res$indiv_data, function(z) z$reg_coef)
+  unit_data <- plain_res$results_df
+  unit_data$alpha_i <- unit_data$ai
+  unit_data$se_alpha_i <- unit_data$seai
+  unit_data$lag <- unit_data$lags
+  unit_data$lead <- unit_data$leads
+  unit_data$obs <- vapply(as.character(unit_data$id), function(uid) plain_res$indiv_data[[uid]]$ti, numeric(1))
+  unit_data$ti <- unit_data$obs
+  unit_data$beta_i <- I(lapply(as.character(unit_data$id), function(uid) plain_res$indiv_data[[uid]]$betai))
+
   results_bundle <- list(
     test_stats = plain_res$stats,
+    z_scores = z_scores,
+    p_values = p_values,
     boot_pvals = boot_pvals,
     bootstrap_distributions = boot_dist,
-    unit_data = plain_res$results_df,
+    unit_data = unit_data,
     indiv_data = plain_res$indiv_data,
     mean_group = list(
       mg_alpha = mg_alpha,
@@ -311,8 +357,11 @@ westerlund_test <- function(data,
       mg_betas = mg_betas,
       se_mg_betas = se_mg_betas
     ),
-    settings = plain_res$settings,
-    mg_results = mg_results
+    settings = settings,
+    metadata = metadata,
+    mg_results = mg_results,
+    mg_tables = mg_results,
+    indiv_reg = indiv_reg
   )
 
   class(results_bundle) <- "westerlund_test"
@@ -769,7 +818,11 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
   # Prepare Results Storage
   results_df <- data.frame(id=ids, ai=NA, seai=NA, aonesemi=NA, lags=NA, leads=NA, wysq=NA, wusq=NA, tnorm=NA)
   work_data$cons <- if(constant) 1 else 0
-  work_data$tren <- if(trend) work_data[[timevar]] else 0
+  work_data$tren <- 0
+  if (trend) {
+    work_data$tren <- ave(work_data[[timevar]], work_data[[idvar]],
+                          FUN = function(z) seq_along(z))
+  }
   counter <- 0; dots <- 0
 
   # ============================================================================
@@ -955,7 +1008,8 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
       if (indiv.ecm) {
           if(verbose)cat(sprintf("\nIndividual ECM Regression for Unit: %s\n", uid))
           # Pass the estimated coefficients and the VCE matrix
-          reg_coef <- westerlund_test_reg(b = coef(mod), V = vcov(mod), verbose = verbose)
+          reg_coef <- westerlund_test_reg(b = coef(mod), V = vcov(mod), verbose = verbose,
+                                           distribution = "t", df = df.residual(mod))
       }
 
       sc <- summary(mod)$coefficients
@@ -1263,8 +1317,9 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #' Internal bootstrap routine for generating a bootstrap distribution of the
 #' Westerlund (2007) ECM-based panel cointegration statistics under the null
 #' hypothesis of no error correction. The routine estimates short-run dynamics for
-#' each unit, constructs residual-based bootstrap samples, and re-computes
-#' statistics by calling \code{\link{WesterlundPlain}} on each iteration.
+#' each unit, constructs residual-based bootstrap samples in a Stata-aligned manner,
+#' and re-computes \eqn{G_t}, \eqn{G_a}, \eqn{P_t}, and \eqn{P_a} by calling
+#' \code{\link{WesterlundPlain}} on each bootstrap sample.
 #'
 #' @param data A \code{data.frame} containing the original panel data.
 #' @param touse Logical vector of length \code{nrow(data)} indicating rows eligible
@@ -1280,14 +1335,18 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #'   \code{c(min,max)} for selecting short-run dynamics in the bootstrap setup.
 #' @param leads Integer or length-2 integer vector, or \code{NULL}. Fixed lead order
 #'   or range. Defaults to 0 if \code{NULL}.
-#' @param westerlund Logical. If \code{TRUE}, uses Westerlund-style information
-#'   criterion and trimming logic in the bootstrap setup.
+#' @param westerlund Logical. If \code{TRUE}, uses the Westerlund-specific
+#'   lag/lead selection criterion in the restricted bootstrap regression:
+#'   \eqn{\log(RSS/(T_i-p-q-1)) + 2(p+q+c+r+1)/(T_i-p_{\max}-q_{\max})},
+#'   where \eqn{c} and \eqn{r} indicate the constant and trend terms.
 #' @param aic Logical. If \code{TRUE}, uses AIC for lag/lead selection when ranges.
 #'   If \code{FALSE}, uses BIC.
 #' @param bootstrap Integer. Number of bootstrap replications.
 #' @param indiv.ecm Logical. If \code{TRUE}, gets output of individual ECM regressions.
 #' @param lrwindow Integer. Bartlett kernel window forwarded to
 #'   \code{\link{WesterlundPlain}} during re-estimation.
+#' @param seed Optional integer random seed. If \code{NULL}, the current R RNG state
+#'   is used.
 #' @param verbose Logical. If \code{TRUE}, prints additional output.
 #'
 #' @details
@@ -1296,25 +1355,42 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #'
 #' \strong{Algorithm Overview:}
 #' \enumerate{
-#'   \item \strong{Residual Extraction:} Estimates a short-run model for \eqn{\Delta y_{it}}
-#'     under the null of no cointegration (no error-correction term) and saves residuals \eqn{e_{it}}.
-#'   \item \strong{Resampling:} Centered residuals are resampled (clustered by row)
-#'     to preserve the cross-sectional correlation structure.
-#'   \item \strong{Recursion:} Bootstrap \eqn{\Delta y} series are generated
-#'     recursively using the estimated AR coefficients.
-#'   \item \strong{Integration:} These differenced series are integrated to levels
-#'     to form a bootstrap panel.
-#'   \item \strong{Re-Testing:} \code{\link{WesterlundPlain}} is called on the
-#'     simulated panel to store the resulting \eqn{G_t, G_a, P_t, P_a}.
+#'   \item \strong{Residual Extraction:} Estimates a restricted short-run model for
+#'     \eqn{\Delta y_{it}} under the null of no error correction and saves residuals
+#'     \eqn{e_{it}} and short-run coefficients.
+#'   \item \strong{Centering:} Demeans residuals within each unit and centers each
+#'     \eqn{\Delta x_{it}} over all usable (\code{touse}) observations for that unit,
+#'     matching the original \code{xtwest} bootstrap setup.
+#'   \item \strong{Resampling and alignment:} Reproduces the Stata-style
+#'     \code{expandcl 2}, actual-time \code{cluster(t)} sampling, and
+#'     \code{newttt}/\code{tussent}/\code{newtt} alignment so that sampled time
+#'     clusters are shared across units while unit-specific panel lengths are retained.
+#'   \item \strong{Recursion:} Constructs bootstrap innovations and recursively
+#'     generates \eqn{\Delta y} using the stored AR and regressor-difference coefficients.
+#'   \item \strong{Integration:} Integrates bootstrap differences to levels and applies
+#'     unit-specific Stata truncation rules.
+#'   \item \strong{Re-Testing:} Calls \code{\link{WesterlundPlain}} on the simulated
+#'     panel to store \eqn{G_t}, \eqn{G_a}, \eqn{P_t}, and \eqn{P_a}.
 #' }
 #'
-#'
-#'
 #' \strong{Time Indexing:}
-#' Unlike the plain estimation, this routine uses a local \code{diff_ts()} helper
-#' that mimics Stata’s \code{D.} operator exactly: differences are marked
-#' \code{NA} if \code{time[t] - time[t-1] != 1}, ensuring gaps are not
-#' implicitly ignored.
+#' The bootstrap setup uses a local \code{diff_ts()} helper that mimics Stata's
+#' \code{D.} operator under gaps: differences are marked \code{NA} when adjacent
+#' time values are not exactly one unit apart.
+#'
+#' \strong{Lag/lead selection:}
+#' When ranges are supplied, selection is performed separately for each unit using
+#' the restricted bootstrap regression, without lagged level terms. In
+#' \code{westerlund=TRUE} mode the criterion is
+#' \deqn{IC(p,q)=\log\left(\frac{RSS}{T_i-p-q-1}\right)
+#' + \frac{2(p+q+c+r+1)}{T_i-p_{\max}-q_{\max}}.}
+#' Otherwise AIC or BIC is used according to \code{aic}.
+#'
+#' \strong{Compatibility note for automatic leads:}
+#' For literal compatibility with the 2010 \code{xtwest} source, the bootstrap
+#' reconstruction uses the final processed unit's selected \code{currlead} as the
+#' global upper bound for lead terms. This reproduces an implementation detail of
+#' that program rather than a separate theoretical requirement.
 #'
 #' @return A list containing:
 #' \itemize{
@@ -1330,10 +1406,12 @@ WesterlundPlain <- function(data, touse, idvar, timevar, yvar, xvars,
 #'
 #' @export
 WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
-                                constant = FALSE, trend = FALSE, lags, leads = NULL,
+                                constant = FALSE, trend = FALSE, lags = 1, leads = NULL,
                                 westerlund = FALSE, aic = TRUE, bootstrap = 100,
-                                indiv.ecm = FALSE, lrwindow = 2, verbose = FALSE) {
+                                indiv.ecm = FALSE, lrwindow = 2, seed = NULL, verbose = FALSE) {
 
+  RNGkind(kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
+  if (!is.null(seed)) set.seed(as.integer(seed))
   if (verbose) cat("\nBootstrapping critical values under H0\n")
 
   # --- Helper: Lag/Lead Vector ---
@@ -1395,6 +1473,10 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
   valid_ids <- unique(work_data[[idvar]][touse])
   coeff_store <- list()
 
+  # xtwest quirk: after the per-ID loop, currlead retains the value selected
+  # for the final panel unit and controls the global bootstrap lead loop.
+  stata_currlead <- maxlead
+
   # 2. Get Coefficients and Residuals
   for (uid in valid_ids) {
     idx <- which(work_data[[idvar]] == uid & touse)
@@ -1435,12 +1517,11 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
           if (sum(valid_rows) > (ncol(X_mat)+1)) {
             mod <- lm(dy[valid_rows] ~ 0 + X_mat[valid_rows, ])
             rss <- sum(resid(mod)^2)
-            # kp = vars + 1 (for sigma, matching Stata estat ic param count)
-            kp <- ncol(X_mat) + 1
-
             ic <- if(westerlund) {
-              # Westerlund IC
-              log(rss/(thisti-l-ld-1)) + 2*(kp)/(thisti-maxlag-maxlead)
+              # Literal xtwest bootstrap IC:
+              # log(RSS/(Ti-p-q-1)) + 2*(p+q+cons+trend+1)/(Ti-pmax-qmax)
+              nparams_stata <- l + ld + as.integer(constant) + as.integer(trend) + 1
+              log(rss/(thisti-l-ld-1)) + 2*nparams_stata/(thisti-maxlag-maxlead)
             } else {
               # AIC: Stata includes constant and sigma in k.
               # R's logLik includes them too.
@@ -1456,6 +1537,10 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       currlag <- curroptlag
       currlead <- curroptlead
     }
+
+    # Preserve the literal 2010 xtwest behavior: this is overwritten for each
+    # unit, leaving the last unit's selected lead in scope after the loop.
+    stata_currlead <- currlead
 
     # Final Regression with Optimal Lags
     X_mat <- matrix(nrow=length(dy), ncol=0); cn <- c()
@@ -1501,14 +1586,16 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
         if (currlead>0) for (l in 1:currlead) xc$F[l+1] <- get_c(paste0("F",l,".d.",x))
         id_coeffs$xvars[[x]] <- xc
       }
-      for (l in 1:currlag) id_coeffs$yvars[l] <- get_c(paste0("L",l,".dy"))
+      if (currlag > 0) {
+        for (l in 1:currlag) id_coeffs$yvars[l] <- get_c(paste0("L",l,".dy"))
+      }
       coeff_store[[as.character(uid)]] <- id_coeffs
     }
   }
 
-  # 3. Demeaning (Center only on e-support rows)
+  # 3. Demeaning
 
-  # First, demean e within id over e-support rows
+  # Demean e within id over its nonmissing residual support
   means_e <- tapply(work_data$e, work_data[[idvar]], mean, na.rm = TRUE)
   work_data$e <- work_data$e - means_e[as.character(work_data[[idvar]])]
 
@@ -1529,14 +1616,15 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
       work_data[[dx_name]][id_rows] <- diff_ts(sub_x, sub_t)
     }
 
-    # center D.x only on e-support rows (mask = e not NA)
+    # Stata: by id: egen meandx = mean(dx) if touse
+    # Center D.x over all usable observations for the unit, not only the
+    # narrower residual-support rows. Missing D.x values are ignored by mean().
     work_data[[cd_name]] <- NA_real_
     for (uid in valid_ids) {
       id_rows <- which(work_data[[idvar]] == uid & touse)
       if (length(id_rows) == 0) next
-      mask <- !is.na(work_data$e[id_rows])        # e-support
       dx_sub <- work_data[[dx_name]][id_rows]
-      mu <- mean(dx_sub[mask], na.rm = TRUE)
+      mu <- mean(dx_sub, na.rm = TRUE)
       work_data[[cd_name]][id_rows] <- dx_sub - mu
     }
 
@@ -1544,171 +1632,181 @@ WesterlundBootstrap <- function(data, touse, idvar, timevar, yvar, xvars,
   }
 
 
-  BOOTSTATS <- matrix(NA, nrow=bootstrap, ncol=4)
-
-  # 4. Bootstrap Loop
-  RNGkind(kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
-
-  # Ti0: original panel length per id (balanced => constant)
-  Ti0 <- as.integer(max(ti_counts))     # ti_counts from earlier
-  # Stata: U = ti - maxlag - maxlead - 1  (newttt upper bound)
-  # --- Balanced support length (Stata: rows where e<. per id) ---
-  Tr_vec <- sapply(valid_ids, function(uid) {
-    id_rows <- (work_data[[idvar]] == uid) & touse
-    sum(!is.na(work_data$e[id_rows]))
-  })
-  U <- as.integer(min(Tr_vec))
-
-  if (U <= 1) stop("U too small. Check residual support length.")
-
-
-  # Stata: Text = ti + maxlag + maxlead + 2 (keep first Text after sorting by newtt)
-  Text <- Ti0 + maxlag + maxlead + 2
-  base_len <- 2 * U                     # expandcl 2
-
   BOOTSTATS <- matrix(NA, nrow = bootstrap, ncol = 4)
 
-  for (b in 1:bootstrap) {
+  # 4. Bootstrap Loop
 
-    # 1. bsample: Draw U cluster indices (1 to U) with replacement
-    # This represents the "time blocks" that will be shared by all IDs
-    t_draw <- sample(1:U, size = U, replace = TRUE)
+  # Build the eligible pool exactly on the support used by Stata's
+  #     bsample if e < ., cluster(t)
+  # while retaining the ACTUAL time labels and each unit's original Ti.
+  eligible_pool <- work_data[touse & !is.na(work_data$e),
+                             c(idvar, timevar, "e", centerd_names),
+                             drop = FALSE]
+  if (nrow(eligible_pool) == 0) stop("No valid observations are available for bootstrap resampling.")
 
-    # 2. expandcl 2: Duplicate each drawn index
-    pool_expanded <- rep(t_draw, each = 2)
+  ti_lookup <- as.integer(ti_counts)
+  names(ti_lookup) <- names(ti_counts)
+  eligible_pool$.__Ti <- ti_lookup[as.character(eligible_pool[[idvar]])]
+  if (any(is.na(eligible_pool$.__Ti))) stop("Could not recover unit-specific Ti for bootstrap pool.")
 
-    # 3. Generate a SINGLE random key vector for the pool
-    # Use one vector to ensure all IDs get the same shuffle
-    newttt <- runif(length(pool_expanded))
+  # Stata: expandcl 2, cluster(id).  The generated expansion marker is not
+  # subsequently used by xtwest; two copies are sufficient for the next step.
+  expanded_pool <- rbind(
+    transform(eligible_pool, .__expanded = 1L),
+    transform(eligible_pool, .__expanded = 2L)
+  )
+  rownames(expanded_pool) <- NULL
 
-    # 4. Create the Permutation (Stable Sort)
-    # We use the original index as a tie-breaker to match Stata's 'sort, stable'
-    perm <- order(newttt, seq_along(newttt))
-    shuffled_t_idx <- pool_expanded[perm]
+  # Stata's cluster(t) uses actual time values, not within-unit row positions.
+  time_keys <- unique(eligible_pool[[timevar]])
+  if (length(time_keys) == 0) stop("No eligible time clusters are available for bootstrap resampling.")
+  expanded_pool$.__time_cluster <- match(expanded_pool[[timevar]], time_keys)
+  rows_by_time <- split(expanded_pool, expanded_pool$.__time_cluster, drop = TRUE)
 
-    # ---- Build a "boot_panel" with length Text per id, using support-only e and centered dX ----
+  for (b in seq_len(bootstrap)) {
+
+    # Equivalent sampling unit to: bsample if e < ., cluster(t)
+    draw_pos <- sample(seq_along(time_keys), size = length(time_keys), replace = TRUE)
+    sampled_parts <- lapply(draw_pos, function(ii) rows_by_time[[as.character(ii)]])
+    sampled <- do.call(rbind, sampled_parts)
+    rownames(sampled) <- NULL
+
+    # Stata: gen newttt = ceil(uniform()*(ti-maxlag-maxlead-1))
+    upper <- as.integer(sampled$.__Ti) - maxlag - maxlead - 1L
+    if (any(upper <= 0L)) stop("Insufficient observations for xtwest bootstrap shuffle.")
+    sampled$.__newttt <- ceiling(runif(nrow(sampled)) * upper)
+
+    # sort id, stable; by id: gen tussent = _n
+    sampled$.__stable0 <- seq_len(nrow(sampled))
+    sampled <- sampled[order(sampled[[idvar]], sampled$.__stable0), , drop = FALSE]
+    rownames(sampled) <- NULL
+    sampled$.__tussent <- ave(seq_len(nrow(sampled)), sampled[[idvar]], FUN = seq_along)
+
+    # sort tussent, stable; by tussent: egen newtt = mean(newttt)
+    sampled$.__stable1 <- seq_len(nrow(sampled))
+    sampled <- sampled[order(sampled$.__tussent, sampled$.__stable1), , drop = FALSE]
+    rownames(sampled) <- NULL
+    sampled$.__newtt <- ave(sampled$.__newttt, sampled$.__tussent, FUN = mean)
+
+    # sort id newtt, stable
+    sampled$.__stable2 <- seq_len(nrow(sampled))
+    sampled <- sampled[order(sampled[[idvar]], sampled$.__newtt, sampled$.__stable2), , drop = FALSE]
+    rownames(sampled) <- NULL
+
     boot_data_list <- vector("list", length(valid_ids))
     names(boot_data_list) <- as.character(valid_ids)
 
     for (uid in valid_ids) {
+      Ti_i <- as.integer(ti_lookup[as.character(uid)])
+      if (is.na(Ti_i)) next
 
-      id_d <- work_data[work_data[[idvar]] == uid & touse, ]
-      id_d <- id_d[order(id_d[[timevar]]), ]
+      # Stata: by id: keep if _n <= ti + maxlag + maxlead + 2
+      sg <- sampled[sampled[[idvar]] == uid, , drop = FALSE]
+      required_len <- Ti_i + maxlag + maxlead + 2L
+      if (nrow(sg) > required_len) sg <- sg[seq_len(required_len), , drop = FALSE]
+      if (nrow(sg) == 0) next
 
-      # support-only mask matches e non-missing rows
-      mask <- !is.na(id_d$e)
-      e_sup <- id_d$e[mask]
-      # center within id already done globally; but safe to demean again (Stata egen mean(e))
-      e_sup <- e_sup - mean(e_sup)
-
-      # centered dX support (your centerd_names computed on full work_data)
-      cdX_sup <- as.matrix(id_d[mask, centerd_names, drop = FALSE])
-
-      # enforce length >= U (balanced should hold). If longer, truncate to U.
-      if (length(e_sup) < U) next
-      if (nrow(cdX_sup) < U) next
-      e_sup <- e_sup[1:U]
-      cdX_sup <- cdX_sup[1:U, , drop = FALSE]
-
-      # Stata: keep if _n <= ti + maxlag + maxlead + 2
-      # This identifies which time blocks this specific ID uses
-      required_len <- Ti0 + maxlag + maxlead + 2
-      idx0 <- shuffled_t_idx[1:required_len]
-
-      # Now pull the support data using these indices
-      e_b <- e_sup[idx0]
-      cdX_b <- cdX_sup[idx0, , drop = FALSE]
-
-      # Initialize u from e
-      u <- e_b
-      if (Text >= maxlag && maxlag > 0) u[1:maxlag] <- NA
-      u[is.na(u)] <- 0
-
-      # Step A: Construct u (Add X terms) using coeff_store (same as your current code)
-      # We apply L(0..maxlag) and F(1..maxlead) on centered dX, with 0-fill
+      Text_i <- nrow(sg)
+      e_b <- as.numeric(sg$e)
+      cdX_b <- as.matrix(sg[, centerd_names, drop = FALSE])
+      storage.mode(cdX_b) <- "double"
 
       cfs_id <- coeff_store[[as.character(uid)]]
       if (is.null(cfs_id)) next
 
+      # -------------------------- e -> u --------------------------
+      u <- e_b
+      if (maxlag > 0) u[seq_len(min(maxlag, Text_i))] <- NA_real_
+      u[is.na(u)] <- 0
+
+      # Stata loops over 0..maxlag globally; coefficients outside an ID's
+      # selected lag are zero-filled. Do not skip zero coefficients: Stata's
+      # missing * 0 remains missing and is only zeroed when dy is initialized.
       for (j in seq_along(xvars)) {
         x <- xvars[j]
         cfs <- cfs_id$xvars[[x]]
         if (is.null(cfs)) next
-
         v_sub <- cdX_b[, j]
 
-        # L(0..maxlag)
         for (L in 0:maxlag) {
-          beta <- cfs$L[L+1]
-          if (!is.na(beta) && beta != 0) u <- u + shiftNA(v_sub, L) * beta
+          beta <- cfs$L[L + 1L]
+          if (is.na(beta)) beta <- 0
+          u <- u + shiftNA(v_sub, L) * beta
         }
-        # F(1..maxlead)
-        if (maxlead > 0) {
-          for (F in 1:maxlead) {
-            beta <- cfs$F[F+1]
-            if (!is.na(beta) && beta != 0) u <- u + shiftNA(v_sub, -F) * beta
+
+        # Literal xtwest currlead quirk: the final unit's selected lead controls
+        # the upper limit for every unit; unused unit coefficients are zero.
+        if (stata_currlead > 0) {
+          for (F in seq_len(stata_currlead)) {
+            beta <- cfs$F[F + 1L]
+            if (is.na(beta)) beta <- 0
+            u <- u + shiftNA(v_sub, -F) * beta
           }
         }
       }
-      u[is.na(u)] <- 0
 
-      # Step B: Recursive AR Logic for dy (length Text), recursion starts after maxlag
-      dy <- rep(0, Text)
-      dy[] <- u
+      # ------------------------- u -> dy --------------------------
+      # Stata: gen dy=u; replace dy=0 if dy>=.; then AR recursion.
+      u_for_dy <- u
+      u_for_dy[is.na(u_for_dy)] <- 0
+      dy <- u_for_dy
 
       phi <- cfs_id$yvars
-      # ensure phi length maxlag
       if (length(phi) < maxlag) phi <- c(phi, rep(0, maxlag - length(phi)))
 
-      if (maxlag > 0) {
-        # recursion only meaningful for t > maxlag
-        for (t in seq_len(Text)) {
-          if (t > maxlag) {
-            ar_term <- 0
-            for (L in 1:maxlag) {
-              bL <- phi[L]
-              if (!is.na(bL) && bL != 0) ar_term <- ar_term + dy[t-L] * bL
-            }
-            dy[t] <- dy[t] + ar_term
+      if (maxlag > 0 && Text_i > maxlag) {
+        for (tt in (maxlag + 1L):Text_i) {
+          ar_term <- 0
+          for (L in seq_len(maxlag)) {
+            bL <- phi[L]
+            if (is.na(bL)) bL <- 0
+            ar_term <- ar_term + dy[tt - L] * bL
           }
+          dy[tt] <- dy[tt] + ar_term
         }
-        dy[1:maxlag] <- NA
       }
+      if (maxlag > 0) dy[seq_len(min(maxlag, Text_i))] <- NA_real_
 
-      # Step C: Integrate to levels
+      # -------------------- integrate to levels -------------------
       booty <- cumsum(replace(dy, is.na(dy), 0))
-      if (maxlag > 0) booty[1:maxlag] <- NA
+      if (maxlag > 0) booty[seq_len(min(maxlag, Text_i))] <- NA_real_
 
-      bootX <- apply(cdX_b, 2, function(v) {
-        out <- cumsum(replace(v, is.na(v), 0))
-        if (maxlag > 0) out[1:maxlag] <- NA
-        out
-      })
+      bootX <- matrix(NA_real_, nrow = Text_i, ncol = length(xvars))
+      for (j in seq_along(xvars)) {
+        bootX[, j] <- cumsum(replace(cdX_b[, j], is.na(cdX_b[, j]), 0))
+      }
+      if (maxlag > 0) bootX[seq_len(min(maxlag, Text_i)), ] <- NA_real_
 
-      # Apply Stata cutoff: set missing if _n > ti + maxlag
-      upper_keep <- Ti0 + maxlag
-      if (upper_keep < Text) {
-        booty[(upper_keep+1):Text] <- NA
-        bootX[(upper_keep+1):Text, ] <- NA
+      # Stata: replace bootstrap levels = . if _n > ti + maxlag
+      upper_keep <- Ti_i + maxlag
+      if (upper_keep < Text_i) {
+        bad <- (upper_keep + 1L):Text_i
+        booty[bad] <- NA_real_
+        bootX[bad, ] <- NA_real_
       }
 
-      # Build df for this id with time=1..Text (like Stata tsset id newt)
+      # Like tsset id newt in Stata.  The generated time index is unit-specific
+      # and starts at one after the common newtt sorting step.
       df_b <- data.frame(
-        id = as.character(uid),
-        t  = as.integer(seq_len(Text)),
-        booty = booty
+        id = rep(as.character(uid), Text_i),
+        t = as.integer(seq_len(Text_i)),
+        booty = booty,
+        stringsAsFactors = FALSE
       )
       for (j in seq_along(xvars)) df_b[[paste0("boot", xvars[j])]] <- bootX[, j]
-
       boot_data_list[[as.character(uid)]] <- df_b
     }
 
+    boot_data_list <- Filter(Negate(is.null), boot_data_list)
+    if (length(boot_data_list) == 0) stop("Bootstrap replication produced no panel observations.")
     boot_data <- do.call(rbind, boot_data_list)
+    rownames(boot_data) <- NULL
 
-    # Drop missings before calling Plain
+    # WesterlundPlain's marksample excludes these boundary rows. Dropping them
+    # here leaves the same usable support and preserves the generated newt labels.
     keep <- !is.na(boot_data$booty)
     for (j in seq_along(xvars)) keep <- keep & !is.na(boot_data[[paste0("boot", xvars[j])]])
-    boot_data <- boot_data[keep, ]
+    boot_data <- boot_data[keep, , drop = FALSE]
 
     touse_boot <- rep(TRUE, nrow(boot_data))
 
@@ -1874,8 +1972,11 @@ shiftNA <- function(v, k) {
 #' If \code{bootstats} is provided, the function calculates "robust" p-values.
 #' These are empirical p-values adjusted for finite samples:
 #' \deqn{p^* = \frac{r + 1}{B + 1}}
-#' where \eqn{r} is the count of bootstrap replicates more extreme (more negative)
-#' than the observed statistic, and \eqn{B} is the total number of valid bootstrap draws.
+#' where \eqn{r} is the count of bootstrap replicates less than or equal to the
+#' observed statistic and \eqn{B} is the total number of valid bootstrap draws.
+#' This correction is intentionally retained in this R implementation; the
+#' original 2010 \code{xtwest} display code uses the uncorrected proportion
+#' \eqn{r/B}.
 #'
 #' @return A list containing:
 #' \itemize{
@@ -2179,32 +2280,29 @@ DisplayWesterlund <- function(stats,
 #' @param b A named numeric vector of coefficients.
 #' @param V A numeric variance-covariance matrix corresponding to \code{b}.
 #' @param verbose Logical. If \code{TRUE}, prints additional output.
+#' @param distribution Character, either \code{"z"} or \code{"t"}. Mean-group
+#'   reporting uses Z inference; individual OLS ECM output uses t inference.
+#' @param df Residual degrees of freedom, required when \code{distribution="t"}.
 #'
 #' @details
 #' \strong{Calculation Logic.}
-#' The function replicates the behavior of Stata's \code{ereturn post} when no
-#' degrees of freedom are specified, using the standard normal distribution (Z)
-#' for all inference:
-#' \itemize{
-#'   \item \strong{Standard Errors:} Derived as the square root of the diagonal of \code{V}.
-#'   \item \strong{z-statistics:} Calculated as \eqn{z = \hat{\beta} / SE(\hat{\beta})}.
-#'   \item \strong{P-values:} Two-tailed probabilities from the standard normal distribution.
-#'   \item \strong{Confidence Intervals:} Calculated as \eqn{\hat{\beta} \pm 1.96 \times SE(\hat{\beta})}.
-#' }
+#' The function supports the two reporting conventions used by the package: Z inference
+#' for mean-group \code{ereturn post}-style tables and t inference for individual OLS ECMs.
+#' Standard errors are derived from \code{V}; two-sided p-values and 95\% confidence
+#' intervals use the selected reference distribution.
 #'
 #' \strong{Formatting.}
 #' The table is printed using \code{stats::printCoefmat()} to ensure clean
 #' alignment and decimal consistency. It includes columns for the Coefficient,
-#' Standard Error, z-statistic, P-value, and the 95\% Confidence Interval.
+#' Standard Error, selected test statistic, P-value, and the 95\% Confidence Interval.
 #'
 #' \strong{Intended use.}
 #' This is an internal utility called by \code{\link{westerlund_test_mg}}. It
 #' provides a standardized way to report results across different parts of the
 #' Westerlund cointegration test output.
 #'
-#' @return A numeric matrix with rows corresponding to the coefficients in \code{b}
-#' and columns for "Coef.", "Std. Err.", "z", "P>|z|", and the 95\% confidence
-#' interval bounds.
+#' @return A numeric matrix with coefficients, standard errors, the selected
+#' test statistic, p-values, and 95\% confidence interval bounds.
 #'
 #' @section Reporting Style:
 #' This section describes the alignment with econometric software reporting standards.
@@ -2227,68 +2325,39 @@ DisplayWesterlund <- function(stats,
 #'
 #' @seealso \code{\link{westerlund_test_mg}}, \code{\link{westerlund_test}}
 #' @export
-westerlund_test_reg <- function(b, V, verbose = FALSE) {
-
-  # Check for validity
-  if (length(b) != nrow(V) || length(b) != ncol(V)) {
+westerlund_test_reg <- function(b, V, verbose = FALSE,
+                                distribution = c("z", "t"), df = NULL) {
+  distribution <- match.arg(distribution)
+  if (length(b) != nrow(V) || length(b) != ncol(V))
     stop("Dimensions of coefficient vector and variance matrix do not match.")
-  }
+  if (distribution == "t" && (is.null(df) || length(df) != 1 || !is.finite(df) || df <= 0))
+    stop("A positive residual df must be supplied when distribution='t'.")
 
-  # ----------------------------------------------------------------------------
-  # 1. Calculate Statistics
-  # ----------------------------------------------------------------------------
-
-  # Coefficients
-  coefs <- as.numeric(b)
-  names(coefs) <- names(b)
-
-  # Standard Errors
-  # Suppress warnings if V has negative diagonals (rare numeric instability)
+  coefs <- as.numeric(b); names(coefs) <- names(b)
   se <- sqrt(diag(V))
-
-  # Z-statistics (eret post defaults to Z without dof() option)
-  z_vals <- coefs / se
-
-  # P-values (Two-tailed Standard Normal)
-  p_vals <- 2 * (1 - pnorm(abs(z_vals)))
-
-  # 95% Confidence Intervals (Z = 1.96)
-  ci_lower <- coefs - 1.96 * se
-  ci_upper <- coefs + 1.96 * se
-
-  # ----------------------------------------------------------------------------
-  # 2. Construct and Print Table
-  # ----------------------------------------------------------------------------
-
-  # Bind into a matrix
-  res_table <- cbind(
-    "Coef." = coefs,
-    "Std. Err." = se,
-    "z" = z_vals,
-    "P>|z|" = p_vals,
-    "[95% Conf." = ci_lower,
-    "Interval]" = ci_upper
-  )
-
-  # Set row names to variable names
+  stat_vals <- coefs / se
+  if (distribution == "t") {
+    p_vals <- 2 * stats::pt(-abs(stat_vals), df = df)
+    crit <- stats::qt(0.975, df = df)
+    stat_name <- "t"; p_name <- "P>|t|"
+  } else {
+    p_vals <- 2 * stats::pnorm(-abs(stat_vals))
+    crit <- stats::qnorm(0.975)
+    stat_name <- "z"; p_name <- "P>|z|"
+  }
+  ci_lower <- coefs - crit * se
+  ci_upper <- coefs + crit * se
+  res_table <- cbind("Coef." = coefs, "Std. Err." = se, stat_vals, p_vals,
+                     "[95% Conf." = ci_lower, "Interval]" = ci_upper)
+  colnames(res_table)[3:4] <- c(stat_name, p_name)
   rownames(res_table) <- names(b)
-
-  # Display using printCoefmat for clean formatting
-  if(verbose) {
+  if (verbose) {
     cat("\n")
-    printCoefmat(res_table,
-                 digits = 4,
-                 signif.stars = FALSE,
-                 na.print = "NA",
-                 cs.ind = 1:2,      # Coef and SE columns
-                 tst.ind = 3,       # Z-stat column
-                 zap.ind = 4,       # P-val column
-                 P.values = TRUE,
-                 has.Pvalue = TRUE)
-
+    printCoefmat(res_table, digits = 4, signif.stars = FALSE, na.print = "NA",
+                 cs.ind = 1:2, tst.ind = 3, zap.ind = 4,
+                 P.values = TRUE, has.Pvalue = TRUE)
     cat("\n")
   }
-
   return(res_table)
 }
 
@@ -2399,66 +2468,24 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
   return(list(mg_model = mg_model, long_run = lr))
 }
 
-# ==============================================================================
+# ============================================================================== 
 # S3 Method: plot.westerlund_test
 # ==============================================================================
 #' Plot Bootstrap Distributions for Westerlund ECM Panel Cointegration Tests
 #'
-#' Creates a faceted \code{ggplot2} visualization of the bootstrap distributions for
-#' the four Westerlund (2007) panel cointegration statistics (\eqn{G_t}, \eqn{G_a},
-#' \eqn{P_t}, \eqn{P_a}). The function renders a 2x2 grid where each panel displays
-#' the kernel density of bootstrap replications, the observed test statistic,
-#' and the left-tail bootstrap critical value.
-#'
-#' @param x An object of class \code{westerlund_test}. Must include
-#'   \code{bootstrap_distributions} (a numeric matrix with 4 columns) and
-#'   \code{test_stats} (a named list or vector of observed statistics).
-#' @param title Character. The main title of the plot.
-#' @param conf_level Numeric in (0,1). The significance level for the bootstrap
-#'   critical value (e.g., \code{0.05} for the 5th percentile).
-#' @param colors A named list of colors for plot elements. Expected names:
-#'   \code{obs} (observed line), \code{crit} (critical value line),
-#'   \code{fill} (density area), and \code{density} (density outline).
-#' @param lwd A named list of line widths. Expected names: \code{obs},
-#'   \code{crit}, and \code{density}.
-#' @param show_grid Logical. If \code{TRUE}, displays major panel grids.
-#' @param ... Additional arguments passed to the plot method.
-#'
-#' @details
-#' \strong{Visualizing the Bootstrap Results:}
-#' The bootstrap distribution is used to provide robust inference when asymptotic
-#' normal approximations are unreliable (e.g., in small samples or with specific
-#' nuisance parameters).
-#'
-#' \strong{Plotting Logic:}
-#' The function transforms the results matrix into a long-format dataframe to
-#' leverage \code{ggplot2} faceting. For each statistic:
-#' 1. Only finite bootstrap draws are included.
-#' 2. An empirical density is estimated via \code{geom_density}.
-#' 3. The \eqn{\alpha}-level critical value is calculated as the \code{conf_level}
-#' quantile of the bootstrap distribution.
-#' 4. Text annotations are added to each facet showing the exact Observed and Critical Values.
-#'
-#' \strong{Interpretation:}
-#' The null hypothesis of no cointegration is rejected at the \eqn{\alpha}
-#' level if the observed statistic (solid line) is to the \emph{left} of
-#' the bootstrap critical value (dashed line).
-#'
-#' @return A \code{ggplot} object. This allows users to further customize the
-#'   plot using standard \code{ggplot2} syntax (e.g., adding themes or labels).
-#'
-#' @references
-#' Westerlund, J. (2007). Testing for error correction in panel data.
-#' \emph{Oxford Bulletin of Economics and Statistics}, 69(6), 709--748.
-#'
-#' @seealso \code{\link{westerlund_test}}, \code{\link{WesterlundBootstrap}}
-#'
-#' @examples
-#' \donttest{
-#' # Assuming 'results' is an object of class 'westerlund_test'
-#' plot(results, conf_level = 0.05)
-#' }
-#'
+#' @param x An object of class \code{westerlund_test}.
+#' @param title Main plot title.
+#' @param conf_level Lower-tail bootstrap critical probability. Defaults to 0.05.
+#' @param save_path Optional file path. If supplied, the plot is saved with \code{ggsave}.
+#' @param dpi Resolution used when \code{save_path} is supplied.
+#' @param figsize Numeric length-2 vector giving width and height in inches.
+#' @param colors Named list with \code{obs}, \code{crit}, \code{fill}, and \code{density}.
+#' @param lwd Named list with line widths for \code{obs}, \code{crit}, and \code{density}.
+#' @param alpha Density fill transparency.
+#' @param show_grid Logical; show major panel grid lines.
+#' @param show_robust_p Logical; annotate the bootstrap p-value in each facet.
+#' @param ... Additional arguments reserved for compatibility.
+#' @return A \code{ggplot} object, invisibly saved as well when \code{save_path} is supplied.
 #' @import ggplot2
 #' @importFrom tidyr pivot_longer
 #' @importFrom scales percent
@@ -2469,241 +2496,76 @@ westerlund_test_mg <- function(b, V, b2, V2, auto, verbose = FALSE) {
 plot.westerlund_test <- function(x,
                                  title = "Westerlund Test: Bootstrap Distributions",
                                  conf_level = 0.05,
-                                 colors = list(
-                                   obs = "#D55E00",
-                                   crit = "#0072B2",
-                                   fill = "grey80",
-                                   density = "grey30"
-                                 ),
+                                 save_path = NULL,
+                                 dpi = 300,
+                                 figsize = c(12, 10),
+                                 colors = list(obs = "#D55E00", crit = "#0072B2",
+                                               fill = "grey80", density = "grey30"),
                                  lwd = list(obs = 1, crit = 0.8, density = 0.5),
-                                 show_grid = TRUE, ...) {
+                                 alpha = 0.5,
+                                 show_grid = TRUE,
+                                 show_robust_p = TRUE, ...) {
+  if (is.null(x$bootstrap_distributions))
+    stop("No bootstrap results found. Run westerlund_test() with bootstrap > 0 first.")
+  if (!is.numeric(conf_level) || length(conf_level) != 1 || conf_level <= 0 || conf_level >= 1)
+    stop("conf_level must be between 0 and 1.")
+  if (length(figsize) != 2) stop("figsize must contain width and height.")
 
-  # 1. Validation Logic
-  if (is.null(x$bootstrap_distributions)) {
-    stop("No bootstrap results found in the object. Ensure 'bootstrap' was enabled in the test.")
-  }
-
-  # 2. Data Transformation (Wide to Long for Faceting)
   boot_df <- as.data.frame(x$bootstrap_distributions)
   colnames(boot_df) <- c("Gt", "Ga", "Pt", "Pa")
-
-  # Reshape for ggplot2
-  plot_data <- tidyr::pivot_longer(
-    boot_df,
-    cols = dplyr::everything(),
-    names_to = "Statistic",
-    values_to = "Value"
-  )
-
-  # Filter out non-finite draws
+  plot_data <- tidyr::pivot_longer(boot_df, cols = dplyr::everything(),
+                                   names_to = "Statistic", values_to = "Value")
   plot_data <- plot_data[is.finite(plot_data$Value), ]
+  obs_df <- data.frame(Statistic = c("Gt", "Ga", "Pt", "Pa"),
+                       Observed = unlist(x$test_stats[c("Gt", "Ga", "Pt", "Pa")]),
+                       stringsAsFactors = FALSE)
+  crit_df <- stats::aggregate(Value ~ Statistic, data = plot_data,
+                              FUN = function(v) stats::quantile(v, conf_level, na.rm = TRUE))
+  names(crit_df)[2] <- "CriticalValue"
+  ref_lines <- merge(obs_df, crit_df, by = "Statistic", all.x = TRUE)
+  ref_lines$RobustP <- NA_real_
+  if (!is.null(x$boot_pvals) && length(x$boot_pvals)) {
+    bp <- unlist(x$boot_pvals)
+    ref_lines$RobustP <- bp[match(ref_lines$Statistic, names(bp))]
+  }
+  ref_lines$Label <- paste0("Obs: ", sprintf("%.3f", ref_lines$Observed),
+                            "\nCV: ", sprintf("%.3f", ref_lines$CriticalValue))
+  if (show_robust_p)
+    ref_lines$Label <- ifelse(is.finite(ref_lines$RobustP),
+                              paste0(ref_lines$Label, "\nRobust p: ", sprintf("%.3f", ref_lines$RobustP)),
+                              ref_lines$Label)
 
-  # 3. Calculate Reference Statistics per Group
-  obs_df <- data.frame(
-    Statistic = names(x$test_stats),
-    Observed = unname(unlist(x$test_stats))
-  )
-
-  # Calculate bootstrap critical values (left-tail quantiles)
-  crit_df <- stats::aggregate(
-    Value ~ Statistic,
-    data = plot_data,
-    FUN = function(v) stats::quantile(v, conf_level)
-  )
-  colnames(crit_df)[2] <- "CriticalValue"
-
-  # Merge for mapping
-  ref_lines <- merge(obs_df, crit_df, by = "Statistic")
-
-  # 4. Building the Plot
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$Value)) +
-    # Density Distribution
-    ggplot2::geom_density(
-      fill = colors$fill,
-      color = colors$density,
-      alpha = 0.5,
-      linewidth = lwd$density
-    ) +
-
-    # Observed Statistic (Solid Vertical Line)
-    ggplot2::geom_vline(
-      data = ref_lines,
-      ggplot2::aes(xintercept = .data$Observed, color = "Observed"),
-      linetype = "solid",
-      linewidth = lwd$obs
-    ) +
-
-    # Critical Value (Dashed Vertical Line)
-    ggplot2::geom_vline(
-      data = ref_lines,
-      ggplot2::aes(xintercept = .data$CriticalValue, color = "Critical"),
-      linetype = "dashed",
-      linewidth = lwd$crit
-    ) +
-
-    # Display individual values as text inside each facet
-    ggplot2::geom_text(
-      data = ref_lines,
-      ggplot2::aes(
-        x = -Inf, y = Inf,
-        label = paste0("Obs: ", round(.data$Observed, 3),
-                       "\nCV: ", round(.data$CriticalValue, 3))
-      ),
-      hjust = -0.1, vjust = 1.5, size = 3,
-      inherit.aes = FALSE, fontface = "italic"
-    ) +
-
-    # Independent X-axis scales for each statistic
+    ggplot2::geom_density(fill = colors$fill, color = colors$density,
+                          alpha = alpha, linewidth = lwd$density) +
+    ggplot2::geom_vline(data = ref_lines,
+                        ggplot2::aes(xintercept = .data$Observed, color = "Observed"),
+                        linetype = "solid", linewidth = lwd$obs) +
+    ggplot2::geom_vline(data = ref_lines,
+                        ggplot2::aes(xintercept = .data$CriticalValue, color = "Critical"),
+                        linetype = "dashed", linewidth = lwd$crit) +
+    ggplot2::geom_text(data = ref_lines,
+                       ggplot2::aes(x = -Inf, y = Inf, label = .data$Label),
+                       hjust = -0.1, vjust = 1.4, size = 3,
+                       inherit.aes = FALSE) +
     ggplot2::facet_wrap(~Statistic, scales = "free", ncol = 2) +
-
-    # Legend and Color Customization
-    ggplot2::scale_color_manual(
-      name = NULL,
-      values = c("Observed" = colors$obs, "Critical" = colors$crit),
-      labels = c(
-        "Observed" = "Observed Statistic",
-        "Critical" = paste0(scales::percent(conf_level), " Bootstrap CV")
-      )
-    ) +
-
-    # Labels and Theming
-    ggplot2::labs(
-      title = title,
-      subtitle = paste("H0: No Cointegration | Replications:", nrow(boot_df)),
-      x = "Statistic Value",
-      y = "Kernel Density"
-    ) +
+    ggplot2::scale_color_manual(name = NULL,
+                                values = c("Observed" = colors$obs, "Critical" = colors$crit),
+                                labels = c("Observed Statistic",
+                                           paste0(scales::percent(conf_level), " Bootstrap CV"))) +
+    ggplot2::labs(title = title,
+                  subtitle = paste("H0: No Cointegration | Replications:", nrow(boot_df)),
+                  x = "Statistic Value", y = "Kernel Density") +
     ggplot2::theme_minimal() +
-    ggplot2::theme(
-      legend.position = "bottom",
-      strip.background = ggplot2::element_rect(fill = "grey95", color = "grey80"),
-      strip.text = ggplot2::element_text(face = "bold"),
-      panel.grid.minor = ggplot2::element_blank(),
-      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
-    )
-
-  if (!show_grid) {
-    p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_blank())
+    ggplot2::theme(legend.position = "bottom",
+                   strip.text = ggplot2::element_text(face = "bold"),
+                   plot.title = ggplot2::element_text(hjust = 0.5))
+  if (!show_grid) p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_blank())
+  if (!is.null(save_path)) {
+    out_dir <- dirname(save_path)
+    if (!identical(out_dir, ".") && !dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(filename = save_path, plot = p, width = figsize[1], height = figsize[2], dpi = dpi)
   }
-
-  return(p)
-}
-plot.westerlund_test <- function(x,
-                                 title = "Westerlund Test: Bootstrap Distributions",
-                                 conf_level = 0.05,
-                                 colors = list(
-                                   obs = "#D55E00",
-                                   crit = "#0072B2",
-                                   fill = "grey80",
-                                   density = "grey30"
-                                 ),
-                                 lwd = list(obs = 1, crit = 0.8, density = 0.5),
-                                 show_grid = TRUE, ...) {
-
-  # Ensure we are working with the results object
-  results <- x
-
-  # 1. Validation Logic
-  if (is.null(results$bootstrap_distributions)) {
-    stop("No bootstrap results found in the object. Ensure 'bootstrap' was enabled in the test.")
-  }
-
-  # 2. Data Transformation (Wide to Long for Faceting)
-  boot_df <- as.data.frame(results$bootstrap_distributions)
-  colnames(boot_df) <- c("Gt", "Ga", "Pt", "Pa")
-
-  # Reshape for ggplot2
-  plot_data <- tidyr::pivot_longer(
-    boot_df,
-    cols = dplyr::everything(),
-    names_to = "Statistic",
-    values_to = "Value"
-  )
-
-  # Filter out non-finite draws
-  plot_data <- plot_data[is.finite(plot_data$Value), ]
-
-  # 3. Calculate Reference Statistics per Group
-  obs_df <- data.frame(
-    Statistic = names(results$test_stats),
-    Observed = unname(unlist(results$test_stats))
-  )
-
-  # Calculate bootstrap critical values (left-tail quantiles)
-  crit_df <- stats::aggregate(
-    Value ~ Statistic,
-    data = plot_data,
-    FUN = function(val) stats::quantile(val, conf_level)
-  )
-  colnames(crit_df)[2] <- "CriticalValue"
-
-  # Merge for mapping
-  ref_lines <- merge(obs_df, crit_df, by = "Statistic")
-
-  # 4. Building the Plot
-  p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$Value)) +
-    ggplot2::geom_density(
-      fill = colors$fill,
-      color = colors$density,
-      alpha = 0.5,
-      linewidth = lwd$density
-    ) +
-
-    ggplot2::geom_vline(
-      data = ref_lines,
-      ggplot2::aes(xintercept = .data$Observed, color = "Observed"),
-      linetype = "solid",
-      linewidth = lwd$obs
-    ) +
-
-    ggplot2::geom_vline(
-      data = ref_lines,
-      ggplot2::aes(xintercept = .data$CriticalValue, color = "Critical"),
-      linetype = "dashed",
-      linewidth = lwd$crit
-    ) +
-
-    ggplot2::geom_text(
-      data = ref_lines,
-      ggplot2::aes(
-        x = -Inf, y = Inf,
-        label = paste0("Obs: ", round(.data$Observed, 3),
-                       "\nCV: ", round(.data$CriticalValue, 3))
-      ),
-      hjust = -0.1, vjust = 1.5, size = 3,
-      inherit.aes = FALSE, fontface = "italic"
-    ) +
-
-    ggplot2::facet_wrap(~Statistic, scales = "free", ncol = 2) +
-
-    ggplot2::scale_color_manual(
-      name = NULL,
-      values = c("Observed" = colors$obs, "Critical" = colors$crit),
-      labels = c(
-        "Observed" = "Observed Statistic",
-        "Critical" = paste0(scales::percent(conf_level), " Bootstrap CV")
-      )
-    ) +
-
-    ggplot2::labs(
-      title = title,
-      subtitle = paste("H0: No Cointegration | Replications:", nrow(boot_df)),
-      x = "Statistic Value",
-      y = "Kernel Density"
-    ) +
-    ggplot2::theme_minimal() +
-    ggplot2::theme(
-      legend.position = "bottom",
-      strip.background = ggplot2::element_rect(fill = "grey95", color = "grey80"),
-      strip.text = ggplot2::element_text(face = "bold"),
-      panel.grid.minor = ggplot2::element_blank(),
-      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
-    )
-
-  if (!show_grid) {
-    p <- p + ggplot2::theme(panel.grid.major = ggplot2::element_blank())
-  }
-
   return(p)
 }
 
@@ -2714,85 +2576,60 @@ plot.westerlund_test <- function(x,
 #' @export
 print.westerlund_test <- function(x, ...) {
   cat("\n--- Westerlund (2007) Panel Cointegration Test ---\n")
-  cat("Observed Statistics:\n")
-  print(unlist(x$test_stats))
-
-  if (!is.null(x$bootstrap_distributions)) {
-    cat(paste0("\nBootstrap Replications: ", nrow(x$bootstrap_distributions), "\n"))
-  }
-
-  cat("\nUse plot(x) to visualize distributions and critical values.\n")
+  tab <- data.frame(
+    Statistic = c("Gt", "Ga", "Pt", "Pa"),
+    Value = unlist(x$test_stats[c("Gt", "Ga", "Pt", "Pa")]),
+    Z_score = unlist(x$z_scores[c("Gt", "Ga", "Pt", "Pa")]),
+    P_val_asymp = unlist(x$p_values[c("Gt", "Ga", "Pt", "Pa")]),
+    row.names = NULL
+  )
+  if (!is.null(x$boot_pvals) && length(x$boot_pvals))
+    tab$P_val_boot <- unlist(x$boot_pvals[tab$Statistic])
+  print(tab, row.names = FALSE, digits = 4)
   invisible(x)
 }
 
 #' Summary Method for Westerlund Test
-#' @param object An object of class 'westerlund_test'
-#' @param ... Additional arguments
+#' @param object An object of class \code{westerlund_test}.
+#' @param ... Additional arguments.
+#' @method summary westerlund_test
 #' @export
 summary.westerlund_test <- function(object, ...) {
-
-  # Helper to find stats regardless of case (gt vs Gt)
-  get_stat <- function(name) {
-    idx <- grep(paste0("^", name, "$"), names(object$test_stats), ignore.case = TRUE)
-    if (length(idx) > 0) return(object$test_stats[[idx]]) else return(NA)
-  }
-
-  # Construct the stats table dynamically
   stats_table <- data.frame(
     Statistic = c("Gt", "Ga", "Pt", "Pa"),
-    Value = c(get_stat("gt"), get_stat("ga"), get_stat("pt"), get_stat("pa")),
-    Z_score = c(get_stat("gt_z"), get_stat("ga_z"), get_stat("pt_z"), get_stat("pa_z")),
-    P_val_asymp = c(get_stat("gt_pval"), get_stat("ga_pval"),
-                    get_stat("pt_pval"), get_stat("pa_pval")),
-    stringsAsFactors = FALSE
+    Value = unlist(object$test_stats[c("Gt", "Ga", "Pt", "Pa")]),
+    Z_score = unlist(object$z_scores[c("Gt", "Ga", "Pt", "Pa")]),
+    P_val_asymp = unlist(object$p_values[c("Gt", "Ga", "Pt", "Pa")]),
+    stringsAsFactors = FALSE, row.names = NULL
   )
-
-  # Add bootstrap p-values if they exist
-  if (!is.null(object$boot_pvals)) {
-    # Match boot p-values by looking for names containing the stat name
-    bp <- unlist(object$boot_pvals)
-    stats_table$P_val_boot <- sapply(c("gt", "ga", "pt", "pa"), function(n) {
-      match_idx <- grep(n, names(bp), ignore.case = TRUE)
-      if (length(match_idx) > 0) bp[match_idx[1]] else NA
-    })
-  }
-
-  out <- list(
-    stats_table = stats_table,
-    settings = object$settings,
-    mg_results = object$mg_results,
-    n_units = if (!is.null(object$indiv_data)) length(object$indiv_data) else NA
-  )
-
+  if (!is.null(object$boot_pvals) && length(object$boot_pvals))
+    stats_table$P_val_boot <- unlist(object$boot_pvals[stats_table$Statistic])
+  out <- list(stats_table = stats_table,
+              settings = object$settings,
+              mean_group = object$mean_group,
+              mg_results = object$mg_results,
+              mg_tables = object$mg_tables,
+              n_units = object$metadata$n_groups)
   class(out) <- "summary.westerlund_test"
-  return(out)
+  out
 }
 
 #' Print Summary Method
-#' @param x An object of class 'summary.westerlund_test'
-#' @param ... Additional arguments
-#' @rdname summary.westerlund_test
+#' @param x An object of class \code{summary.westerlund_test}.
+#' @param ... Unused.
 #' @method print summary.westerlund_test
 #' @export
 print.summary.westerlund_test <- function(x, ...) {
-  cat("\n======================================================\n")
-  cat("  Westerlund (2007) Panel Cointegration Test Summary  \n")
-  cat("======================================================\n")
-
-  cat(paste0("\nUnits: ", x$n_units, " | Time Periods: ", x$settings$T, "\n"))
-  cat(paste0("Deterministic terms: ",
-             if(x$settings$constant) "Constant" else "",
-             if(x$settings$trend) " & Trend" else "", "\n"))
-  cat(paste0("Lag/Lead selection: ", x$settings$selection_method, "\n"))
-
-  cat("\nTest Statistics:\n")
-  # Use print.data.frame to show the table nicely
-  print(x$stats_table, row.names = FALSE, digits = 3)
-
-  cat("\nMean Group (MG) Estimates:\n")
-  print(x$mg_results, row.names = FALSE, digits = 3)
-
-  cat("\nNote: H0 = No Cointegration. Rejection suggests error correction exists.\n")
-  cat("======================================================\n")
+  cat("\n======================================================================\n")
+  cat("Westerlund (2007) Panel Cointegration Test Summary\n")
+  cat("======================================================================\n")
+  cat(sprintf("Units: %s | Average time periods: %.2f\n", x$n_units, x$settings$T))
+  det <- if (isTRUE(x$settings$trend)) "trend" else if (isTRUE(x$settings$constant)) "constant" else "none"
+  cat("Deterministic terms:", det, "\n")
+  cat("Lag/lead selection:", x$settings$selection_method, "\n\n")
+  print(x$stats_table, row.names = FALSE, digits = 4)
+  cat("\nMean Group Estimates:\n")
+  print(x$mean_group)
   invisible(x)
 }
+
