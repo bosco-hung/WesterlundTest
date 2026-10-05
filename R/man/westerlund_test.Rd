@@ -76,13 +76,50 @@ bandwidth, bootstrap count, seed, and average panel length.
 }
 }
 \examples{
-res <- westerlund_test(
-  data = df, yvar = "y", xvars = "x1",
-  idvar = "id", timevar = "time",
-  constant = TRUE, lags = 1, leads = 0,
-  bootstrap = 99, seed = 123
+\donttest{
+# 1. Generate a small synthetic panel dataset
+set.seed(123)
+N <- 10
+T <- 30
+
+df <- data.frame(
+  id = rep(1:N, each = T),
+  time = rep(1:T, N),
+  y = rnorm(N * T),
+  x1 = rnorm(N * T)
 )
-summary(res)
+
+# 2. Run Asymptotic (Plain) Test
+res_plain <- westerlund_test(
+  data = df,
+  yvar = "y",
+  xvars = "x1",
+  idvar = "id",
+  timevar = "time",
+  constant = TRUE,
+  lags = 1,
+  leads = 0,
+  verbose = FALSE
+)
+
+print(res_plain$test_stats)
+
+# 3. Run Bootstrap Test with automatic lag selection
+# Note: bootstrap replications are kept low for example purposes
+res_boot <- westerlund_test(
+  data = df,
+  yvar = "y",
+  xvars = "x1",
+  idvar = "id",
+  timevar = "time",
+  constant = TRUE,
+  lags = c(0, 1),
+  bootstrap = 50,
+  verbose = TRUE
+)
+
+summary(res_boot)
+}
 }
 \references{
 Westerlund, J. (2007). Testing for error correction in panel data.

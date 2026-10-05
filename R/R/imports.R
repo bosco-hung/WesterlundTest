@@ -1,5 +1,5 @@
-#' @importFrom stats AIC coef complete.cases density lm na.omit pnorm
-#' @importFrom stats printCoefmat quantile resid runif sd setNames vcov
+#' @importFrom stats AIC ave coef complete.cases density df.residual lm na.omit
+#' @importFrom stats pnorm printCoefmat quantile resid runif sd setNames vcov
 #' @importFrom graphics abline grid legend mtext par plot.new polygon
 #' @importFrom grDevices rgb
 #' @importFrom utils globalVariables
